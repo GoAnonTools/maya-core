@@ -12,6 +12,8 @@ class ModelRouterTests(unittest.TestCase):
             "services": {
                 "model": {
                     "provider": "lightning",
+                    "model": "NousResearch/Hermes-3-Llama-3.1-8B",
+                    "base_url": "http://localhost:8000",
                     "endpoint": None,
                 }
             },
@@ -21,8 +23,9 @@ class ModelRouterTests(unittest.TestCase):
             select_model(),
             {
                 "mode": "online",
-                "model": "hermes",
+                "model": "NousResearch/Hermes-3-Llama-3.1-8B",
                 "provider": "lightning",
+                "base_url": "http://localhost:8000",
                 "endpoint": None,
             },
         )
@@ -31,7 +34,11 @@ class ModelRouterTests(unittest.TestCase):
     def test_offline_mode_selects_local_qwen(self, load_settings):
         load_settings.return_value = {
             "maya": {"mode": "offline"},
-            "services": {"model": {"endpoint": "https://unused.example"}},
+            "services": {
+                "model": {
+                    "endpoint": "https://unused.example",
+                }
+            },
         }
 
         self.assertEqual(
@@ -40,6 +47,7 @@ class ModelRouterTests(unittest.TestCase):
                 "mode": "offline",
                 "model": "qwen_local",
                 "provider": "local",
+                "base_url": None,
                 "endpoint": None,
             },
         )

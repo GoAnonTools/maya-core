@@ -1,5 +1,4 @@
 # Local Maya Core configuration.
-# Endpoints are placeholders until external service connections are implemented.
 
 maya:
   mode: online
@@ -7,7 +6,8 @@ maya:
 services:
   model:
     provider: lightning
-    base_url: null
+    model: NousResearch/Hermes-3-Llama-3.1-8B
+    base_url: http://localhost:8000
     endpoint: null
 
   memory:

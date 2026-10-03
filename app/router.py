@@ -18,8 +18,12 @@ def select_model(settings: dict[str, Any] | None = None) -> dict[str, Any]:
     if mode == "online":
         return {
             "mode": mode,
-            "model": "hermes",
+            "model": model_service.get(
+                "model",
+                "NousResearch/Hermes-3-Llama-3.1-8B",
+            ),
             "provider": model_service.get("provider", "lightning"),
+            "base_url": model_service.get("base_url"),
             "endpoint": model_service.get("endpoint"),
         }
 
@@ -28,6 +32,7 @@ def select_model(settings: dict[str, Any] | None = None) -> dict[str, Any]:
             "mode": mode,
             "model": "qwen_local",
             "provider": "local",
+            "base_url": None,
             "endpoint": None,
         }
 

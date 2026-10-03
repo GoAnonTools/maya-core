@@ -14,6 +14,7 @@ def send_prompt(
     context: dict[str, Any],
     route: dict[str, Any] | None = None,
     client: httpx.Client | None = None,
+    settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Send a request context through the selected model client.
 
@@ -21,7 +22,11 @@ def send_prompt(
     makes the current connection state explicit without making a network call.
     """
     selected_route = select_model() if route is None else route
-    request = build_chat_completion_request(context, selected_route)
+    request = build_chat_completion_request(
+        context,
+        selected_route,
+        settings=settings,
+    )
     payload = request["payload"]
     endpoint = selected_route.get("endpoint") or request["base_url"]
     if selected_route.get("mode") == "offline":
