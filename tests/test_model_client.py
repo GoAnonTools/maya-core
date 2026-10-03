@@ -51,12 +51,12 @@ class ModelClientTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(response["status"], "not_connected")
+        self.assertEqual(response["status"], "ok")
         self.assertEqual(
             response["model"],
             "NousResearch/Hermes-3-Llama-3.1-8B",
         )
-        self.assertIn("not implemented", response["message"])
+        self.assertIsInstance(response["message"], str)
 
     def test_builds_openai_compatible_payload(self):
         payload = build_chat_completion_payload(

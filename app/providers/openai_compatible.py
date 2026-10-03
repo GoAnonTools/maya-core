@@ -29,12 +29,19 @@ def build_chat_completion_payload(
     if not isinstance(model, str) or not model.strip():
         raise ValueError("Model route must include a model name")
 
+    system_prompt = maya.get("system_prompt")
+
+    if isinstance(system_prompt, str) and system_prompt.strip():
+        system_content = system_prompt.strip()
+    else:
+        system_content = f"You are {identity}."
+
     return {
         "model": model,
         "messages": [
             {
                 "role": "system",
-                "content": f"You are {identity}.",
+                "content": system_content,
             },
             {
                 "role": "user",
