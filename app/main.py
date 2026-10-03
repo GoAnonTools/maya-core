@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from datetime import datetime, timezone
 import os
 
+from app.identity import load_identity
+
 
 MAYA_VERSION = "0.1.0"
 
@@ -37,3 +39,8 @@ def health():
             "agent_os": "disabled"
         }
     }
+
+
+@app.get("/identity")
+def get_identity():
+    return load_identity()
