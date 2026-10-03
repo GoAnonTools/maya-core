@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import os
 
 from app.identity import load_identity
+from app.settings import get_public_settings, load_settings
 
 
 MAYA_VERSION = "0.1.0"
@@ -44,3 +45,8 @@ def health():
 @app.get("/identity")
 def get_identity():
     return load_identity()
+
+
+@app.get("/config/status")
+def get_config_status():
+    return get_public_settings(load_settings())

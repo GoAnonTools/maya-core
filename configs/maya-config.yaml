@@ -1,0 +1,18 @@
+# Local Maya Core configuration.
+# Endpoints are placeholders until external service connections are implemented.
+
+maya:
+  mode: online
+
+services:
+  model:
+    provider: lightning
+    endpoint: null
+
+  memory:
+    provider: lightning
+    endpoint: null
+
+  agent_os:
+    enabled: false
+    endpoint: null
