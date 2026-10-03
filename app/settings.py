@@ -31,6 +31,7 @@ def get_public_settings(settings: dict[str, Any]) -> dict[str, Any]:
         "services": {
             "model": {
                 "provider": model.get("provider"),
+                "base_url": model.get("base_url"),
                 "endpoint": model.get("endpoint"),
             },
             "memory": {
