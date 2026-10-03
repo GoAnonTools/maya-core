@@ -1,5 +1,7 @@
 from typing import Any
 
+import httpx
+
 from app.settings import load_settings
 
 
@@ -53,10 +55,48 @@ def build_chat_completion_request(
     model_service = _as_mapping(services.get("model"))
 
     return {
-        "base_url": model_service.get("base_url"),
+        "base_url": (
+            model_service.get("base_url")
+            or route.get("base_url")
+            or route.get("endpoint")
+        ),
         "path": CHAT_COMPLETIONS_PATH,
         "payload": build_chat_completion_payload(context, route),
     }
+
+
+def send_chat_completion(
+    request: dict[str, Any],
+    client: httpx.Client,
+) -> str:
+    """Send a prepared request with an injected HTTP client and parse its text."""
+    base_url = request.get("base_url")
+    if not isinstance(base_url, str) or not base_url.strip():
+        raise ValueError("OpenAI-compatible request must include a base URL")
+
+    response = client.post(
+        f"{base_url.rstrip('/')}{request['path']}",
+        json=request["payload"],
+    )
+    response.raise_for_status()
+    return parse_chat_completion_response(response.json())
+
+
+def parse_chat_completion_response(response: dict[str, Any]) -> str:
+    """Extract assistant text from an OpenAI-compatible response."""
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("OpenAI-compatible response has no choices")
+
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        raise ValueError("OpenAI-compatible response has no message")
+
+    content = message.get("content")
+    if not isinstance(content, str):
+        raise ValueError("OpenAI-compatible response has no text content")
+
+    return content
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:

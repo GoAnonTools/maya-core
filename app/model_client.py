@@ -1,8 +1,11 @@
 from typing import Any
 
+import httpx
+
 from app.providers.openai_compatible import (
     build_chat_completion_payload,
     build_chat_completion_request,
+    send_chat_completion,
 )
 from app.router import select_model
 
@@ -10,6 +13,7 @@ from app.router import select_model
 def send_prompt(
     context: dict[str, Any],
     route: dict[str, Any] | None = None,
+    client: httpx.Client | None = None,
 ) -> dict[str, Any]:
     """Send a request context through the selected model client.
 
@@ -28,6 +32,14 @@ def send_prompt(
             "status": "unavailable",
             "model": selected_route.get("model"),
             "message": "No model endpoint is configured; prompt was not sent.",
+            "request": payload,
+        }
+
+    if client is not None:
+        return {
+            "status": "ok",
+            "model": selected_route.get("model"),
+            "message": send_chat_completion(request, client),
             "request": payload,
         }
 
