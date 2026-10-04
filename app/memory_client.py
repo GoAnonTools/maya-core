@@ -25,3 +25,20 @@ def store_memory(
     response.raise_for_status()
 
     return response.json()
+
+
+def search_memory(
+    query: str,
+    base_url: str = DEFAULT_MEMORY_URL,
+) -> list[dict[str, Any]]:
+    response = httpx.get(
+        f"{base_url}/memory/search",
+        params={
+            "q": query,
+        },
+        timeout=10.0,
+    )
+
+    response.raise_for_status()
+
+    return response.json()
