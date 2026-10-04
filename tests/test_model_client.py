@@ -40,7 +40,26 @@ class ModelClientTests(unittest.TestCase):
         )
         self.assertIn("not sent", response["message"])
 
-    def test_does_not_connect_when_endpoint_is_configured(self):
+    def test_connects_when_endpoint_is_configured(self):
+        class FakeClient:
+            def post(self, *args, **kwargs):
+                return FakeResponse()
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "Hello from Hermes"
+                            }
+                        }
+                    ]
+                }
+
         response = send_prompt(
             self.context,
             {
@@ -49,6 +68,7 @@ class ModelClientTests(unittest.TestCase):
                 "provider": "lightning",
                 "endpoint": "https://model.example",
             },
+            client=FakeClient(),
         )
 
         self.assertEqual(response["status"], "ok")
@@ -56,7 +76,10 @@ class ModelClientTests(unittest.TestCase):
             response["model"],
             "NousResearch/Hermes-3-Llama-3.1-8B",
         )
-        self.assertIsInstance(response["message"], str)
+        self.assertEqual(
+            response["message"],
+            "Hello from Hermes",
+        )
 
     def test_builds_openai_compatible_payload(self):
         payload = build_chat_completion_payload(

@@ -15,6 +15,7 @@ from app.errors import (
 )
 from app.identity import load_identity
 from app.model_client import send_prompt
+from app.memory_client import store_memory
 from app.router import select_model
 from app.schemas import ChatRequest, ChatResponse, ErrorResponse
 from app.settings import get_public_settings, load_settings
@@ -89,6 +90,16 @@ def chat(request: ChatRequest):
         )
 
     context = create_request_context(request.message)
+
+    if request.message.lower().startswith("remember "):
+        memory_text = request.message[9:].strip()
+
+        store_memory(
+            "user_memory",
+            memory_text,
+            8,
+        )
+
     route = select_model()
     result = send_prompt(context, route)
 
