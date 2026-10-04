@@ -10,6 +10,7 @@ from app.delegation.policy import (
     DelegationPolicy,
     OperationScope,
 )
+from app.delegation.profile_binding import bind_specialist_profile
 
 __all__ = [
     "DelegationEvent",
@@ -19,6 +20,7 @@ __all__ = [
     "ApprovalRequirement",
     "DelegationPolicy",
     "OperationScope",
+    "bind_specialist_profile",
 ]
 
 

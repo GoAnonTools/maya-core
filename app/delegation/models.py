@@ -1,9 +1,14 @@
 """Provider-neutral delegation lifecycle models."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from app.workers.capabilities import WorkerRole
 
 
 class DelegationStatus(str, Enum):
@@ -28,6 +33,12 @@ class DelegationRequest:
     session_id: str | None = None
     required_capabilities: frozenset[str] = field(default_factory=frozenset)
     selected_worker: dict[str, Any] = field(default_factory=dict)
+    specialist_id: str | None = None
+    specialist_role: WorkerRole | None = None
+    specialist_capabilities: frozenset[str] = field(
+        default_factory=frozenset
+    )
+    specialist_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
