@@ -5,6 +5,7 @@ from app.routing import (
     BasicRoutingPolicy,
     RoutingContext,
     RoutingDecision,
+    RoutingFailure,
 )
 from app.workers import Worker, WorkerCapability, WorkerRegistry, WorkerRole
 
@@ -158,8 +159,106 @@ class BasicRoutingPolicyTests(unittest.TestCase):
             required_capabilities=frozenset({"specialized_tasks"}),
         )
 
-        with self.assertRaises(LookupError):
+        with self.assertRaises(RoutingFailure) as raised:
             BasicRoutingPolicy().decide(context)
+
+        self.assertEqual(
+            raised.exception.reason_code,
+            "required_capabilities_missing",
+        )
+        self.assertEqual(
+            raised.exception.missing_capabilities,
+            frozenset({"specialized_tasks"}),
+        )
+
+    def test_worker_without_required_capability_is_not_selected(self):
+        registry = build_registry()
+        registry.register(
+            "ministral",
+            StubWorker(),
+            WorkerCapability(
+                worker_id="ministral",
+                role=WorkerRole.CONVERSATIONAL,
+                display_name="Ministral",
+                capabilities=frozenset({"conversational"}),
+                metadata={"preferred_for": ["conversational"]},
+            ),
+        )
+        context = RoutingContext(
+            request=NormalizedRequest(context={}, route={}),
+            worker_registry=registry,
+            default_worker_id="default",
+            required_capabilities=frozenset({"conversational", "chat"}),
+        )
+
+        decision = BasicRoutingPolicy().decide(context)
+
+        self.assertEqual(decision.worker_id, "default")
+
+    def test_unavailable_preferred_worker_is_ignored(self):
+        registry = build_registry()
+        registry.register(
+            "ministral",
+            StubWorker(),
+            WorkerCapability(
+                worker_id="ministral",
+                role=WorkerRole.CONVERSATIONAL,
+                display_name="Ministral",
+                capabilities=frozenset({"conversational", "chat"}),
+                availability=False,
+                metadata={"preferred_for": ["conversational"]},
+            ),
+        )
+        context = RoutingContext(
+            request=NormalizedRequest(context={}, route={}),
+            worker_registry=registry,
+            default_worker_id="default",
+            required_capabilities=frozenset({"conversational"}),
+        )
+
+        decision = BasicRoutingPolicy().decide(context)
+
+        self.assertEqual(decision.worker_id, "default")
+        self.assertTrue(decision.fallback_used)
+
+    def test_fallback_does_not_bypass_capability_constraints(self):
+        registry = WorkerRegistry()
+        registry.register(
+            "default",
+            StubWorker(),
+            WorkerCapability(
+                worker_id="default",
+                role=WorkerRole.CONVERSATIONAL,
+                display_name="Default",
+                capabilities=frozenset({"conversational"}),
+            ),
+        )
+        registry.register(
+            "ministral",
+            StubWorker(),
+            WorkerCapability(
+                worker_id="ministral",
+                role=WorkerRole.CONVERSATIONAL,
+                display_name="Ministral",
+                capabilities=frozenset({"conversational", "chat"}),
+                availability=False,
+                metadata={"preferred_for": ["conversational"]},
+            ),
+        )
+        context = RoutingContext(
+            request=NormalizedRequest(context={}, route={}),
+            worker_registry=registry,
+            default_worker_id="default",
+            required_capabilities=frozenset({"conversational", "chat"}),
+        )
+
+        with self.assertRaises(RoutingFailure) as raised:
+            BasicRoutingPolicy().decide(context)
+
+        self.assertEqual(
+            raised.exception.missing_capabilities,
+            frozenset({"chat"}),
+        )
 
 
 class OrchestratorRoutingTests(unittest.TestCase):

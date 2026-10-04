@@ -8,6 +8,7 @@ from app.workers import WorkerRegistry
 from app.workers.capabilities import WorkerCapability, WorkerRole
 from app.workers.ministral import MinistralWorker
 from app.workers.openai_compatible import OpenAICompatibleWorker
+from app.workers.specialist import SpecialistWorker
 
 
 DEFAULT_WORKER_ID = "default"
@@ -16,6 +17,7 @@ DEFAULT_WORKER_ID = "default"
 def create_worker_catalog(
     send_prompt_fn: Callable[..., dict[str, Any]] = send_prompt,
     stream_prompt_fn: Callable[..., Iterator[str]] = stream_prompt,
+    specialist_worker: SpecialistWorker | None = None,
 ) -> WorkerRegistry:
     """Create and register the currently configured worker set.
 
@@ -65,16 +67,37 @@ def create_worker_catalog(
         ),
     )
 
-    registry.register_capability(
-        WorkerCapability(
+    specialist_capability = (
+        specialist_worker.capability()
+        if specialist_worker is not None
+        else WorkerCapability(
             worker_id="specialist",
             role=WorkerRole.SPECIALIST,
             display_name="Specialist worker",
-            capabilities=frozenset({"specialized_tasks"}),
+            capabilities=frozenset(
+                {
+                    "coding",
+                    "research",
+                    "tool_call_proposal",
+                    "filesystem_read",
+                }
+            ),
             availability=False,
-            metadata={"execution": "not_registered"},
+            metadata={
+                "execution": "not_registered",
+                "worker_type": "specialist",
+            },
         )
     )
+
+    if specialist_worker is None:
+        registry.register_capability(specialist_capability)
+    else:
+        registry.register_specialist(
+            "specialist",
+            specialist_worker,
+            capability=specialist_capability,
+        )
 
     registry.register_capability(
         WorkerCapability(

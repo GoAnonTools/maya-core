@@ -47,6 +47,18 @@ class WorkerCatalogTests(unittest.TestCase):
         specialist = registry.get_capability("specialist")
         self.assertEqual(specialist.role, WorkerRole.SPECIALIST)
         self.assertFalse(specialist.availability)
+        self.assertEqual(
+            specialist.capabilities,
+            frozenset(
+                {
+                    "coding",
+                    "research",
+                    "tool_call_proposal",
+                    "filesystem_read",
+                }
+            ),
+        )
+        self.assertFalse(registry.is_available("specialist"))
 
         offline = registry.get_capability("offline-fallback")
         self.assertEqual(offline.role, WorkerRole.FALLBACK)

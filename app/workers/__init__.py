@@ -3,6 +3,7 @@
 from app.workers.base import Worker
 from app.workers.capabilities import WorkerCapability, WorkerRole
 from app.workers.registry import WorkerRegistry
+from app.workers.specialist import SpecialistWorker
 
 __all__ = [
     "OpenAICompatibleWorker",
@@ -11,6 +12,7 @@ __all__ = [
     "WorkerCapability",
     "WorkerRegistry",
     "WorkerRole",
+    "SpecialistWorker",
 ]
 
 

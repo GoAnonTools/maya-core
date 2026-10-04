@@ -67,6 +67,54 @@ class WorkerRegistryTests(unittest.TestCase):
         )
         self.assertFalse(self.registry.is_available("specialist"))
 
+    def test_register_explicit_specialist_worker_separately(self):
+        from app.delegation import DelegationRequest
+        from app.delegation.models import DelegationEvent
+        from app.workers.specialist import SpecialistWorker
+        from app.workers.capabilities import WorkerCapability, WorkerRole
+
+        class TestSpecialist(SpecialistWorker):
+            def capability(self):
+                return WorkerCapability(
+                    worker_id="specialist",
+                    role=WorkerRole.SPECIALIST,
+                    display_name="Specialist",
+                    capabilities=frozenset({"coding"}),
+                )
+
+            def submit(self, request):
+                return request.delegation_id
+
+            def stream_events(self, delegation_id):
+                yield DelegationEvent(
+                    delegation_id=delegation_id,
+                    status="started",
+                )
+
+            def cancel(self, delegation_id):
+                pass
+
+            def complete(self, delegation_id, result=None):
+                return DelegationEvent(
+                    delegation_id=delegation_id,
+                    status="completed",
+                    result=result,
+                )
+
+            def fail(self, delegation_id, error):
+                return DelegationEvent(
+                    delegation_id=delegation_id,
+                    status="failed",
+                    error=error,
+                )
+
+        worker = TestSpecialist()
+        self.registry.register_specialist("specialist", worker)
+
+        self.assertIs(self.registry.get_specialist("specialist"), worker)
+        self.assertTrue(self.registry.is_available("specialist"))
+        self.assertNotIn("specialist", self.registry.list_workers())
+
     def test_list_workers_returns_registered_ids(self):
         self.registry.register("first", StubWorker())
         self.registry.register("second", StubWorker())

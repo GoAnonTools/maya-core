@@ -4,6 +4,7 @@ from typing import Any
 
 from app.workers.base import Worker
 from app.workers.capabilities import WorkerCapability
+from app.workers.specialist import SpecialistWorker
 
 
 class WorkerRegistry:
@@ -15,6 +16,7 @@ class WorkerRegistry:
 
     def __init__(self) -> None:
         self._workers: dict[str, Worker] = {}
+        self._specialist_workers: dict[str, SpecialistWorker] = {}
         self._capabilities: dict[str, WorkerCapability] = {}
 
     def register(
@@ -68,12 +70,47 @@ class WorkerRegistry:
 
         self._capabilities[capability.worker_id] = capability
 
+    def register_specialist(
+        self,
+        worker_id: str,
+        worker: SpecialistWorker,
+        capability: WorkerCapability | None = None,
+    ) -> None:
+        """Register an explicitly supplied specialist worker separately."""
+        if not isinstance(worker_id, str) or not worker_id.strip():
+            raise ValueError("worker_id must not be empty")
+
+        if not isinstance(worker, SpecialistWorker):
+            raise TypeError(
+                "worker must implement the SpecialistWorker contract"
+            )
+
+        worker_capability = capability or worker.capability()
+
+        if worker_capability.worker_id != worker_id:
+            raise ValueError(
+                "capability.worker_id must match worker_id"
+            )
+
+        if worker_id in self._workers or worker_id in self._specialist_workers:
+            raise ValueError(f"Worker already registered: {worker_id}")
+
+        self.register_capability(worker_capability)
+        self._specialist_workers[worker_id] = worker
+
     def get(self, worker_id: str) -> Worker:
         """Return the worker registered under ``worker_id``."""
         try:
             return self._workers[worker_id]
         except KeyError as exc:
             raise KeyError(f"Unknown worker: {worker_id}") from exc
+
+    def get_specialist(self, worker_id: str) -> SpecialistWorker:
+        """Return an explicitly registered specialist worker."""
+        try:
+            return self._specialist_workers[worker_id]
+        except KeyError as exc:
+            raise KeyError(f"Unknown specialist worker: {worker_id}") from exc
 
     def list_workers(self) -> list[str]:
         """Return registered worker IDs in registration order."""
@@ -100,6 +137,14 @@ class WorkerRegistry:
         worker = self._workers.get(worker_id)
 
         if worker is None:
+            worker = self._specialist_workers.get(worker_id)
+
+        if worker is None:
+            return False
+
+        capability = self._capabilities.get(worker_id)
+
+        if capability is not None and not capability.availability:
             return False
 
         availability: Any = getattr(worker, "is_available", True)

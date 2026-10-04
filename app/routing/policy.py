@@ -7,10 +7,31 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from app.workers.capabilities import WorkerCapability
+from app.workers.capabilities import WorkerRole
 from app.workers.registry import WorkerRegistry
+from app.routing.classification import TaskClassification
 
 if TYPE_CHECKING:
     from app.orchestration.orchestrator import NormalizedRequest
+
+
+class RoutingFailure(LookupError):
+    """Explainable failure to satisfy a routing capability requirement."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: str,
+        worker_id: str,
+        required_capabilities: frozenset[str],
+        missing_capabilities: frozenset[str],
+    ) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.worker_id = worker_id
+        self.required_capabilities = required_capabilities
+        self.missing_capabilities = missing_capabilities
 
 
 @dataclass(frozen=True)
@@ -21,6 +42,8 @@ class RoutingContext:
     worker_registry: WorkerRegistry
     default_worker_id: str
     required_capabilities: frozenset[str] = frozenset()
+    classification: TaskClassification | None = None
+    task_capabilities: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -68,9 +91,30 @@ class BasicRoutingPolicy(RoutingPolicy):
         )
 
         if default_capability is None:
-            raise LookupError(
+            raise RoutingFailure(
                 "Default worker has no registered capability metadata: "
-                f"{context.default_worker_id}"
+                f"{context.default_worker_id}",
+                reason_code="default_capability_missing",
+                worker_id=context.default_worker_id,
+                required_capabilities=required_capabilities,
+                missing_capabilities=required_capabilities,
+            )
+
+        specialist = self._specialist_worker(
+            capabilities,
+            context,
+            required_capabilities,
+        )
+
+        if specialist is not None:
+            return self._decision(
+                specialist,
+                request_metadata,
+                requested_capabilities,
+                required_capabilities,
+                capabilities,
+                "specialist capability requires delegation handoff",
+                "specialist_delegation_required",
             )
 
         if "conversational" in required_capabilities:
@@ -95,9 +139,13 @@ class BasicRoutingPolicy(RoutingPolicy):
             missing_capabilities = required_capabilities.difference(
                 default_capability.capabilities
             )
-            raise LookupError(
+            raise RoutingFailure(
                 "Default worker does not provide required capabilities: "
-                + ", ".join(sorted(missing_capabilities))
+                + ", ".join(sorted(missing_capabilities)),
+                reason_code="required_capabilities_missing",
+                worker_id=default_capability.worker_id,
+                required_capabilities=required_capabilities,
+                missing_capabilities=frozenset(missing_capabilities),
             )
 
         if not default_capability.availability or not context.worker_registry.is_available(
@@ -125,6 +173,41 @@ class BasicRoutingPolicy(RoutingPolicy):
                 else "default_capability_match"
             ),
             "conversational" in required_capabilities,
+        )
+
+    def _specialist_worker(
+        self,
+        capabilities: list[WorkerCapability],
+        context: RoutingContext,
+        required_capabilities: frozenset[str],
+    ) -> WorkerCapability | None:
+        specialists = [
+            capability
+            for capability in capabilities
+            if capability.role == WorkerRole.SPECIALIST
+            and required_capabilities.intersection(
+                capability.capabilities
+            )
+        ]
+
+        if not specialists:
+            return None
+
+        for capability in specialists:
+            if (
+                capability.availability
+                and self._matches(capability, required_capabilities)
+            ):
+                return capability
+
+        unavailable = specialists[0]
+        raise RoutingFailure(
+            "Required specialist capabilities are unavailable: "
+            + ", ".join(sorted(required_capabilities)),
+            reason_code="specialist_unavailable",
+            worker_id=unavailable.worker_id,
+            required_capabilities=required_capabilities,
+            missing_capabilities=frozenset(),
         )
 
     def _preferred_conversational_worker(
