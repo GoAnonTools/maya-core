@@ -36,6 +36,21 @@ def build_chat_completion_payload(
     else:
         system_content = f"You are {identity}."
 
+    memories = context.get("memory")
+
+    if isinstance(memories, list) and memories:
+        memory_lines = [
+            f"- {item}"
+            for item in memories
+            if isinstance(item, str) and item.strip()
+        ]
+
+        if memory_lines:
+            system_content += (
+                "\n\nMemory context:\n"
+                + "\n".join(memory_lines)
+            )
+
     return {
         "model": model,
         "messages": [

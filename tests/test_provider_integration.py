@@ -59,3 +59,68 @@ class OpenAIProviderIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["message"], "Hello from mocked Hermes.")
+
+
+    def test_model_client_injects_memory_into_system_prompt(self):
+        received = {}
+
+        def mock_chat_completions(request):
+            received["payload"] = json.loads(request.content)
+
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "Memory received.",
+                            }
+                        }
+                    ]
+                },
+                request=request,
+            )
+
+        context = {
+            "maya": {
+                "identity": "Maya",
+            },
+            "mode": "online",
+            "message": "What AI setup do I prefer?",
+            "memory": [
+                "David prefers local-first AI",
+            ],
+        }
+
+        route = {
+            "mode": "online",
+            "model": "hermes",
+            "provider": "lightning",
+            "endpoint": "https://mock.hermes.test",
+        }
+
+        with httpx.Client(
+            transport=httpx.MockTransport(mock_chat_completions)
+        ) as client:
+            result = send_prompt(
+                context,
+                route,
+                client,
+            )
+
+        system_message = received["payload"]["messages"][0]["content"]
+
+        self.assertIn(
+            "Memory context:",
+            system_message,
+        )
+
+        self.assertIn(
+            "David prefers local-first AI",
+            system_message,
+        )
+
+        self.assertEqual(
+            result["message"],
+            "Memory received.",
+        )
