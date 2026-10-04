@@ -81,11 +81,18 @@ def send_chat_completion(
     if not isinstance(base_url, str) or not base_url.strip():
         raise ValueError("OpenAI-compatible request must include a base URL")
 
-    response = client.post(
-        f"{base_url.rstrip('/')}{request['path']}",
-        json=request["payload"],
-    )
-    response.raise_for_status()
+    try:
+        response = client.post(
+            f"{base_url.rstrip('/')}{request['path']}",
+            json=request["payload"],
+        )
+        response.raise_for_status()
+
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            f"Model service unavailable: {exc}"
+        ) from exc
+
     return parse_chat_completion_response(response.json())
 
 

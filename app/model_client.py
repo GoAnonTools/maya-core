@@ -54,6 +54,15 @@ def send_prompt(
             "message": send_chat_completion(request, client),
             "request": payload,
         }
+
+    except RuntimeError as exc:
+        return {
+            "status": "unavailable",
+            "model": selected_route.get("model"),
+            "message": str(exc),
+            "request": payload,
+        }
+
     finally:
         if owns_client:
             client.close()
