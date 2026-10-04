@@ -16,9 +16,11 @@ from app.errors import (
 from app.identity import load_identity
 from app.model_client import send_prompt, stream_prompt
 from app.memory_client import store_memory
+from app.orchestration import NormalizedRequest, Orchestrator
 from app.router import select_model
 from app.schemas import ChatRequest, ChatResponse, ErrorResponse
 from app.settings import get_public_settings, load_settings
+from app.workers.catalog import create_worker_catalog
 
 
 MAYA_VERSION = "0.1.0"
@@ -39,6 +41,15 @@ def get_mode():
     - switch offline mode
     """
     return os.getenv("MAYA_MODE", "online")
+
+
+def get_orchestrator() -> Orchestrator:
+    """Build the execution boundary around the current default worker."""
+    worker_registry = create_worker_catalog(
+        send_prompt_fn=send_prompt,
+        stream_prompt_fn=stream_prompt,
+    )
+    return Orchestrator(worker_registry, default_worker_id="default")
 
 
 @app.get("/health")
@@ -101,7 +112,8 @@ def chat(request: ChatRequest):
         )
 
     route = select_model()
-    result = send_prompt(context, route)
+    request_context = NormalizedRequest(context=context, route=route)
+    result = get_orchestrator().execute(request_context)
 
     if result["status"] == "unavailable":
         if route["mode"] == "offline":
@@ -161,13 +173,12 @@ def chat_stream(request: ChatRequest):
         )
 
     route = select_model()
+    request_context = NormalizedRequest(context=context, route=route)
+    orchestrator = get_orchestrator()
 
     def generate():
         try:
-            for chunk in stream_prompt(
-                context,
-                route,
-            ):
+            for chunk in orchestrator.stream(request_context):
                 yield f"data: {chunk}\n\n"
 
             yield "data: [DONE]\n\n"
@@ -179,4 +190,3 @@ def chat_stream(request: ChatRequest):
         generate(),
         media_type="text/event-stream",
     )
-
