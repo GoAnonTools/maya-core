@@ -15,6 +15,12 @@ class SpecialistWorker(ABC):
     choose workers, manage lifecycle storage, or impose a provider/runtime.
     """
 
+    def start(self) -> None:
+        """Start worker resources; the default contract is a no-op."""
+
+    def shutdown(self) -> None:
+        """Release worker resources; the default contract is a no-op."""
+
     @abstractmethod
     def capability(self) -> WorkerCapability:
         """Return provider-neutral capability metadata for this worker."""

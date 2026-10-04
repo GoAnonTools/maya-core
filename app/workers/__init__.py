@@ -27,4 +27,9 @@ def __getattr__(name):
 
         return MinistralWorker
 
+    if name == "LightningSpecialistWorker":
+        from app.workers.lightning import LightningSpecialistWorker
+
+        return LightningSpecialistWorker
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
