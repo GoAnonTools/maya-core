@@ -1,6 +1,5 @@
 """Provider-neutral delegation lifecycle boundary."""
 
-from app.delegation.manager import DelegationManager
 from app.delegation.models import (
     DelegationEvent,
     DelegationRequest,
@@ -21,3 +20,12 @@ __all__ = [
     "DelegationPolicy",
     "OperationScope",
 ]
+
+
+def __getattr__(name):
+    if name == "DelegationManager":
+        from app.delegation.manager import DelegationManager
+
+        return DelegationManager
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

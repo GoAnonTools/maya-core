@@ -8,6 +8,9 @@ from app.workers.specialist import SpecialistWorker
 __all__ = [
     "OpenAICompatibleWorker",
     "MinistralWorker",
+    "LightningSpecialistWorker",
+    "LightningRemoteClient",
+    "LightningTransport",
     "Worker",
     "WorkerCapability",
     "WorkerRegistry",
@@ -31,5 +34,16 @@ def __getattr__(name):
         from app.workers.lightning import LightningSpecialistWorker
 
         return LightningSpecialistWorker
+
+    if name in {"LightningRemoteClient", "LightningTransport"}:
+        from app.workers.lightning_transport import (
+            LightningRemoteClient,
+            LightningTransport,
+        )
+
+        return {
+            "LightningRemoteClient": LightningRemoteClient,
+            "LightningTransport": LightningTransport,
+        }[name]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

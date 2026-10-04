@@ -4,35 +4,12 @@ This module defines only the worker boundary and in-memory lifecycle behavior.
 It intentionally performs no Lightning, network, process, Docker, or SSH work.
 """
 
-from dataclasses import dataclass, field
-import os
 from typing import Any
 
 from app.delegation.models import DelegationEvent, DelegationRequest, DelegationStatus
 from app.workers.capabilities import WorkerCapability, WorkerRole
+from app.workers.lightning_protocol import LightningWorkerConfig
 from app.workers.specialist import SpecialistWorker
-
-
-@dataclass(frozen=True)
-class LightningWorkerConfig:
-    """Connection placeholders for a future Lightning implementation."""
-
-    endpoint: str | None = None
-    workspace: str | None = None
-    deployment: str | None = None
-    enabled: bool = False
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_environment(cls) -> "LightningWorkerConfig":
-        return cls(
-            endpoint=os.getenv("MAYA_LIGHTNING_ENDPOINT"),
-            workspace=os.getenv("MAYA_LIGHTNING_WORKSPACE"),
-            deployment=os.getenv("MAYA_LIGHTNING_DEPLOYMENT"),
-            enabled=os.getenv("MAYA_LIGHTNING_ENABLED", "false").lower()
-            in {"1", "true", "yes"},
-        )
-
 
 class LightningSpecialistWorker(SpecialistWorker):
     """In-memory placeholder for a future Lightning specialist worker."""
