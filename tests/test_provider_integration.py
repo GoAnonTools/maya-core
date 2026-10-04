@@ -3,7 +3,7 @@ import unittest
 
 import httpx
 
-from app.model_client import send_prompt
+from app.model_client import send_prompt, stream_prompt
 
 
 class OpenAIProviderIntegrationTests(unittest.TestCase):
@@ -123,4 +123,51 @@ class OpenAIProviderIntegrationTests(unittest.TestCase):
         self.assertEqual(
             result["message"],
             "Memory received.",
+        )
+
+
+    def test_model_client_streams_response_chunks(self):
+        def mock_chat_completions(request):
+            return httpx.Response(
+                200,
+                content=(
+                    b'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n'
+                    b'data: {"choices":[{"delta":{"content":" Maya"}}]}\n\n'
+                    b'data: [DONE]\n\n'
+                ),
+                request=request,
+            )
+
+        context = {
+            "maya": {
+                "identity": "Maya",
+            },
+            "mode": "online",
+            "message": "Hello Maya",
+        }
+
+        route = {
+            "mode": "online",
+            "model": "hermes",
+            "provider": "lightning",
+            "endpoint": "https://mock.hermes.test",
+        }
+
+        with httpx.Client(
+            transport=httpx.MockTransport(mock_chat_completions)
+        ) as client:
+            chunks = list(
+                stream_prompt(
+                    context,
+                    route,
+                    client,
+                )
+            )
+
+        self.assertEqual(
+            chunks,
+            [
+                '{"choices":[{"delta":{"content":"Hello"}}]}',
+                '{"choices":[{"delta":{"content":" Maya"}}]}',
+            ],
         )

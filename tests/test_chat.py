@@ -125,3 +125,70 @@ class ChatEndpointTests(unittest.TestCase):
                 }
             },
         )
+
+
+    @patch("app.main.stream_prompt")
+    @patch("app.main.create_request_context")
+    @patch("app.main.select_model")
+    def test_chat_stream_returns_streaming_response(
+        self,
+        select_model,
+        create_context,
+        stream_prompt,
+    ):
+        select_model.return_value = {
+            "mode": "online",
+            "model": "hermes",
+            "provider": "lightning",
+            "endpoint": "https://model.example",
+        }
+
+        create_context.return_value = {
+            "maya": {"identity": "Maya"},
+            "mode": "online",
+            "message": "Hello Maya",
+        }
+
+        stream_prompt.return_value = iter(
+            [
+                "Hello",
+                " Maya",
+            ]
+        )
+
+        response = self.client.post(
+            "/chat/stream",
+            json={"message": "Hello Maya"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(
+            response.headers["content-type"],
+            "text/event-stream; charset=utf-8",
+        )
+
+        self.assertIn(
+            "data: Hello",
+            response.text,
+        )
+
+        self.assertIn(
+            "data:  Maya",
+            response.text,
+        )
+
+        self.assertIn(
+            "data: [DONE]",
+            response.text,
+        )
+
+        create_context.assert_called_once_with(
+            "Hello Maya"
+        )
+
+        stream_prompt.assert_called_once_with(
+            create_context.return_value,
+            select_model.return_value,
+        )
+

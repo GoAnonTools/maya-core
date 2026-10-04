@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from datetime import datetime, timezone
 import os
 from typing import Union
@@ -14,7 +14,7 @@ from app.errors import (
     make_error_response,
 )
 from app.identity import load_identity
-from app.model_client import send_prompt
+from app.model_client import send_prompt, stream_prompt
 from app.memory_client import store_memory
 from app.router import select_model
 from app.schemas import ChatRequest, ChatResponse, ErrorResponse
@@ -136,3 +136,47 @@ def chat(request: ChatRequest):
         "mode": route["mode"],
         "timestamp": datetime.now(timezone.utc),
     }
+
+
+@app.post("/chat/stream")
+def chat_stream(request: ChatRequest):
+    if not request.message.strip():
+        return JSONResponse(
+            status_code=400,
+            content=make_error_response(
+                INVALID_REQUEST,
+                "message must not be empty",
+            ),
+        )
+
+    context = create_request_context(request.message)
+
+    if request.message.lower().startswith("remember "):
+        memory_text = request.message[9:].strip()
+
+        store_memory(
+            "user_memory",
+            memory_text,
+            8,
+        )
+
+    route = select_model()
+
+    def generate():
+        try:
+            for chunk in stream_prompt(
+                context,
+                route,
+            ):
+                yield f"data: {chunk}\n\n"
+
+            yield "data: [DONE]\n\n"
+
+        except Exception as exc:
+            yield f"data: ERROR: {exc}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+    )
+

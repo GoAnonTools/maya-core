@@ -111,6 +111,49 @@ def send_chat_completion(
     return parse_chat_completion_response(response.json())
 
 
+def stream_chat_completion(
+    request: dict[str, Any],
+    client: httpx.Client,
+):
+    """Stream assistant text from an OpenAI-compatible endpoint."""
+
+    base_url = request.get("base_url")
+
+    if not isinstance(base_url, str) or not base_url.strip():
+        raise ValueError(
+            "OpenAI-compatible request must include a base URL"
+        )
+
+    try:
+        with client.stream(
+            "POST",
+            f"{base_url.rstrip('/')}{request['path']}",
+            json={
+                **request["payload"],
+                "stream": True,
+            },
+        ) as response:
+
+            response.raise_for_status()
+
+            for line in response.iter_lines():
+                if not line:
+                    continue
+
+                if line.startswith("data: "):
+                    data = line[6:]
+
+                    if data == "[DONE]":
+                        break
+
+                    yield data
+
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            f"Model service unavailable: {exc}"
+        ) from exc
+
+
 def parse_chat_completion_response(response: dict[str, Any]) -> str:
     """Extract assistant text from an OpenAI-compatible response."""
     choices = response.get("choices")
