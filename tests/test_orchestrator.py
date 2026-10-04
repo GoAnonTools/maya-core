@@ -31,6 +31,9 @@ class OrchestratorTests(unittest.TestCase):
                 worker_id="default",
                 role=WorkerRole.CONVERSATIONAL,
                 display_name="Default worker",
+                capabilities=frozenset(
+                    {"chat", "streaming", "conversational"}
+                ),
             ),
         )
         self.orchestrator = Orchestrator(

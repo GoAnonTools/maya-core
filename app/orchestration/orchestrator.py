@@ -2,11 +2,16 @@
 
 from collections.abc import Iterator
 from dataclasses import dataclass
+import logging
 from typing import Any
+from uuid import uuid4
 
 from app.routing import BasicRoutingPolicy, RoutingContext, RoutingPolicy
 from app.workers.base import Worker
 from app.workers.registry import WorkerRegistry
+
+
+logger = logging.getLogger("maya.routing")
 
 
 @dataclass(frozen=True)
@@ -20,6 +25,7 @@ class NormalizedRequest:
     context: dict[str, Any]
     route: dict[str, Any]
     metadata: dict[str, Any] | None = None
+    request_id: str | None = None
 
 
 class Orchestrator:
@@ -53,9 +59,40 @@ class Orchestrator:
         )
         return self._routing_policy.decide(routing_context)
 
+    @staticmethod
+    def _request_id(request: NormalizedRequest) -> str:
+        return (
+            request.request_id
+            or (request.metadata or {}).get("request_id")
+            or str(uuid4())
+        )
+
+    def _log_decision(
+        self,
+        request: NormalizedRequest,
+        decision,
+    ) -> None:
+        logger.info(
+            "routing_decision",
+            extra={
+                "routing_decision": {
+                    "request_id": self._request_id(request),
+                    "required_capabilities": decision.metadata.get(
+                        "required_capabilities",
+                        [],
+                    ),
+                    "selected_worker_id": decision.worker_id,
+                    "selected_role": decision.capability.role.value,
+                    "reason_code": decision.reason_code,
+                    "fallback_used": decision.fallback_used,
+                }
+            },
+        )
+
     def execute(self, request: NormalizedRequest) -> dict[str, Any]:
         """Execute a normalized request and return the worker result."""
         decision = self._decision(request)
+        self._log_decision(request, decision)
         worker = self._worker_registry.get(decision.worker_id)
         return worker.execute(
             request.context,
@@ -65,6 +102,7 @@ class Orchestrator:
     def stream(self, request: NormalizedRequest) -> Iterator[str]:
         """Stream a normalized request through the default worker."""
         decision = self._decision(request)
+        self._log_decision(request, decision)
         worker = self._worker_registry.get(decision.worker_id)
         yield from worker.stream(
             request.context,

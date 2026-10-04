@@ -26,7 +26,7 @@ def build_registry(available=True):
             worker_id="default",
             role=WorkerRole.CONVERSATIONAL,
             display_name="Default worker",
-            capabilities=frozenset({"chat", "streaming"}),
+            capabilities=frozenset({"chat", "streaming", "conversational"}),
             availability=available,
         ),
     )
@@ -57,7 +57,10 @@ class BasicRoutingPolicyTests(unittest.TestCase):
             decision.metadata["request_metadata"],
             {"source": "test"},
         )
-        self.assertEqual(decision.metadata["matched_capabilities"], ["chat"])
+        self.assertEqual(
+            decision.metadata["matched_capabilities"],
+            ["chat"],
+        )
 
     def test_rejects_missing_default_capability(self):
         request = NormalizedRequest(context={}, route={})
@@ -70,6 +73,68 @@ class BasicRoutingPolicyTests(unittest.TestCase):
 
         with self.assertRaises(LookupError):
             BasicRoutingPolicy().decide(context)
+
+    def test_conversational_capability_selects_preferred_worker(self):
+        registry = WorkerRegistry()
+        registry.register(
+            "default",
+            StubWorker(),
+            WorkerCapability(
+                worker_id="default",
+                role=WorkerRole.CONVERSATIONAL,
+                display_name="Default worker",
+                capabilities=frozenset({"chat", "streaming", "conversational"}),
+                metadata={"fallback_for": ["conversational"]},
+            ),
+        )
+        registry.register(
+            "ministral",
+            StubWorker(),
+            WorkerCapability(
+                worker_id="ministral",
+                role=WorkerRole.CONVERSATIONAL,
+                display_name="Ministral",
+                capabilities=frozenset({"chat", "streaming", "conversational"}),
+                metadata={"preferred_for": ["conversational"]},
+            ),
+        )
+        context = RoutingContext(
+            request=NormalizedRequest(context={}, route={}),
+            worker_registry=registry,
+            default_worker_id="default",
+            required_capabilities=frozenset({"conversational"}),
+        )
+
+        decision = BasicRoutingPolicy().decide(context)
+
+        self.assertEqual(decision.worker_id, "ministral")
+        self.assertIn("preferred conversational", decision.reason)
+
+    def test_unavailable_ministral_falls_back_to_default_worker(self):
+        registry = build_registry()
+        registry.register(
+            "ministral",
+            StubWorker(),
+            WorkerCapability(
+                worker_id="ministral",
+                role=WorkerRole.CONVERSATIONAL,
+                display_name="Ministral",
+                capabilities=frozenset({"chat", "streaming", "conversational"}),
+                availability=False,
+                metadata={"preferred_for": ["conversational"]},
+            ),
+        )
+        context = RoutingContext(
+            request=NormalizedRequest(context={}, route={}),
+            worker_registry=registry,
+            default_worker_id="default",
+            required_capabilities=frozenset({"conversational"}),
+        )
+
+        decision = BasicRoutingPolicy().decide(context)
+
+        self.assertEqual(decision.worker_id, "default")
+        self.assertIn("fallback", decision.reason)
 
     def test_rejects_unavailable_default_worker(self):
         request = NormalizedRequest(context={}, route={})

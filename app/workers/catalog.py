@@ -31,9 +31,12 @@ def create_worker_catalog(
         worker_id=DEFAULT_WORKER_ID,
         role=WorkerRole.CONVERSATIONAL,
         display_name="OpenAI-compatible worker",
-        capabilities=frozenset({"chat", "streaming"}),
+        capabilities=frozenset({"chat", "streaming", "conversational"}),
         availability=True,
-        metadata={"execution": "openai-compatible"},
+        metadata={
+            "execution": "openai-compatible",
+            "fallback_for": ["conversational"],
+        },
     )
 
     registry.register(
@@ -53,9 +56,12 @@ def create_worker_catalog(
             worker_id="ministral",
             role=WorkerRole.CONVERSATIONAL,
             display_name="Ministral conversational worker",
-            capabilities=frozenset({"chat", "streaming"}),
+            capabilities=frozenset({"chat", "streaming", "conversational"}),
             availability=ministral_worker.is_available(),
-            metadata={"execution": "openai-compatible"},
+            metadata={
+                "execution": "openai-compatible",
+                "preferred_for": ["conversational"],
+            },
         ),
     )
 

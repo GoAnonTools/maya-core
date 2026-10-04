@@ -32,7 +32,7 @@ class WorkerCatalogTests(unittest.TestCase):
         )
         self.assertEqual(
             capability.capabilities,
-            frozenset({"chat", "streaming"}),
+            frozenset({"chat", "streaming", "conversational"}),
         )
         self.assertTrue(capability.availability)
 
@@ -60,5 +60,5 @@ class WorkerCatalogTests(unittest.TestCase):
         self.assertEqual(capability.role, WorkerRole.CONVERSATIONAL)
         self.assertEqual(
             capability.capabilities,
-            frozenset({"chat", "streaming"}),
+            frozenset({"chat", "streaming", "conversational"}),
         )
