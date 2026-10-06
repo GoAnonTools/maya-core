@@ -94,12 +94,19 @@ class OptInHermesExecutorSelector(ExecutorSelector):
         hermes_capabilities = self.hermes_executor.capabilities()
         trace = self._trace(decision, hermes_capabilities)
         category_name = decision.metadata.get("task_category", category)
+        missing_executor_permissions = (
+            hermes_capabilities.required_permissions - granted_permissions
+        )
+        trace["missing_executor_permissions"] = sorted(
+            missing_executor_permissions
+        )
 
         if (
             decision.eligible_for_hermes
             and hermes_capabilities.available
             and isinstance(category_name, str)
             and category_name in hermes_capabilities.supported_task_categories
+            and not missing_executor_permissions
         ):
             return ExecutorSelection(
                 executor=self.hermes_executor,
@@ -168,4 +175,6 @@ class OptInHermesExecutorSelector(ExecutorSelector):
             return "Hermes is unavailable; using local fallback"
         if category not in capabilities.supported_task_categories:
             return "Hermes lacks the requested capability; using local fallback"
+        if capabilities.required_permissions:
+            return "Hermes permissions are not granted; using local fallback"
         return "Hermes was not selected; using local fallback"

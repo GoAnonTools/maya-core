@@ -21,9 +21,10 @@ from app.workers.lightning_protocol import (
 
 
 class FakeExecutor(LightningExecutor):
-    def __init__(self, backend, categories):
+    def __init__(self, backend, categories, required_permissions=()):
         self.backend = backend
         self.categories = frozenset(categories)
+        self.required_permissions = frozenset(required_permissions)
         self.jobs = {}
         self.cancelled = []
         self.manager = None
@@ -38,6 +39,7 @@ class FakeExecutor(LightningExecutor):
     def capabilities(self):
         return ExecutorCapabilities(
             supported_task_categories=self.categories,
+            required_permissions=self.required_permissions,
             available=True,
             version="fake-1",
             metadata={"backend": self.backend},
@@ -192,6 +194,30 @@ class ExecutorSelectionTests(unittest.TestCase):
 
         self.assertEqual(events[-1].status, DelegationStatus.CANCELLED)
         self.assertEqual(self.hermes.cancelled, ["hermes-delegation-cancel"])
+
+    def test_executor_permissions_are_checked_before_selection(self):
+        permissioned = FakeExecutor(
+            "hermes",
+            {"coding"},
+            required_permissions={"read_only"},
+        )
+        selector = OptInHermesExecutorSelector(
+            hermes_executor=permissioned,
+            fallback_executor=self.fallback,
+            policy=HermesDelegationPolicy(enabled=True),
+        )
+
+        without_permission = selector.select(self.request())
+        with_permission = selector.select(
+            self.request(granted_permissions=["read_only"]),
+        )
+
+        self.assertEqual(without_permission.target, "in_memory")
+        self.assertEqual(
+            without_permission.trace["missing_executor_permissions"],
+            ["read_only"],
+        )
+        self.assertEqual(with_permission.target, "hermes")
 
 
 if __name__ == "__main__":

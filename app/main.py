@@ -21,6 +21,11 @@ from app.router import select_model
 from app.schemas import ChatRequest, ChatResponse, ErrorResponse
 from app.settings import get_public_settings, load_settings
 from app.workers.catalog import create_worker_catalog
+from app.delegation.api import (
+    create_delegation_observability_app,
+    register_repository_analysis_routes,
+)
+from app.delegation.repository_workflow import create_repository_analysis_workflow
 
 
 MAYA_VERSION = "0.1.0"
@@ -31,6 +36,14 @@ app = FastAPI(
     version=MAYA_VERSION,
     description="Maya Core Router — identity, routing, permissions"
 )
+
+try:
+    _repository_analysis_workflow = create_repository_analysis_workflow()
+except ValueError:
+    _repository_analysis_workflow = None
+register_repository_analysis_routes(app, _repository_analysis_workflow)
+if _repository_analysis_workflow is not None:
+    app.mount("", create_delegation_observability_app(_repository_analysis_workflow.manager))
 
 
 def get_mode():

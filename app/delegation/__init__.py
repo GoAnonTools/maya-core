@@ -7,10 +7,11 @@ from app.delegation.models import (
     DelegationStatus,
     PendingApproval,
 )
-from app.delegation.executor_selection import (
-    ExecutorSelection,
-    ExecutorSelector,
-    OptInHermesExecutorSelector,
+from app.delegation.audit import (
+    DelegationExecutionRecord,
+    DelegationTimelineEvent,
+    ExecutionAuditStatus,
+    ExecutionAuditStore,
 )
 from app.delegation.policy import (
     ApprovalRequirement,
@@ -32,6 +33,10 @@ __all__ = [
     "ExecutorSelection",
     "ExecutorSelector",
     "OptInHermesExecutorSelector",
+    "DelegationExecutionRecord",
+    "DelegationTimelineEvent",
+    "ExecutionAuditStatus",
+    "ExecutionAuditStore",
     "ApprovalRequirement",
     "DelegationPolicy",
     "HermesDelegationPolicy",
@@ -47,5 +52,22 @@ def __getattr__(name):
         from app.delegation.manager import DelegationManager
 
         return DelegationManager
+
+    if name in {
+        "ExecutorSelection",
+        "ExecutorSelector",
+        "OptInHermesExecutorSelector",
+    }:
+        from app.delegation.executor_selection import (
+            ExecutorSelection,
+            ExecutorSelector,
+            OptInHermesExecutorSelector,
+        )
+
+        return {
+            "ExecutorSelection": ExecutorSelection,
+            "ExecutorSelector": ExecutorSelector,
+            "OptInHermesExecutorSelector": OptInHermesExecutorSelector,
+        }[name]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

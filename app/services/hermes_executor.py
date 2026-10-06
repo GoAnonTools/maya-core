@@ -14,6 +14,7 @@ from app.services.hermes_errors import (
     HermesPersistenceError,
     HermesUnknownTerminalState,
     HermesUnavailableError,
+    user_friendly_message,
 )
 from app.services.hermes_persistence import HermesRunPersistence
 from app.services.hermes_protocol import (
@@ -62,8 +63,10 @@ class HermesExecutor(LightningExecutor):
         client: HermesClient | None = None,
         persistence: HermesRunPersistence | None = None,
         persistence_path: str | Path | None = None,
+        required_permissions: frozenset[str] = frozenset(),
     ) -> None:
         self._client = client
+        self._required_permissions = frozenset(required_permissions)
         if persistence is not None and persistence_path is not None:
             raise ValueError("Provide persistence or persistence_path, not both")
         self._persistence = persistence or (
@@ -100,7 +103,7 @@ class HermesExecutor(LightningExecutor):
         """Describe Hermes support without registering or routing to it."""
         return ExecutorCapabilities(
             supported_task_categories=frozenset({"coding", "research"}),
-            required_permissions=frozenset(),
+            required_permissions=self._required_permissions,
             available=self.is_available(),
             version="1",
             metadata={
@@ -212,10 +215,12 @@ class HermesExecutor(LightningExecutor):
             yield self._lightning_event(
                 session,
                 LightningEventType.FAILED,
+                message=user_friendly_message(exc),
                 error=str(exc),
                 metadata={
                     **self.metadata,
                     "failure_state": self._failure_state(exc),
+                    "user_message": user_friendly_message(exc),
                 },
             )
         except Exception as exc:
@@ -223,10 +228,12 @@ class HermesExecutor(LightningExecutor):
             yield self._lightning_event(
                 session,
                 LightningEventType.FAILED,
+                message="Maya could not complete the Hermes task.",
                 error=str(exc),
                 metadata={
                     **self.metadata,
                     "failure_state": "network_failure",
+                    "user_message": "Maya could not complete the Hermes task.",
                 },
             )
 
@@ -281,7 +288,19 @@ class HermesExecutor(LightningExecutor):
                 "error": str(exc),
             }
 
-        return {**self.metadata, "metrics": self.metrics(), "client": client_health}
+        available = bool(
+            client_health.get(
+                "available",
+                client_health.get("status") in {"healthy", "ok", "online"},
+            )
+        )
+        return {
+            **self.metadata,
+            "status": "healthy" if available else "unhealthy",
+            "available": available,
+            "metrics": self.metrics(),
+            "client": client_health,
+        }
 
     def metrics(self) -> dict[str, int]:
         """Return reliability and operational counters for Hermes runs."""

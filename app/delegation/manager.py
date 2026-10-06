@@ -14,6 +14,11 @@ from app.delegation.models import (
     PendingApproval,
 )
 from app.delegation.persistence import DelegationStatePersistence
+from app.delegation.audit import (
+    DelegationExecutionRecord,
+    ExecutionAuditStatus,
+    ExecutionAuditStore,
+)
 from app.delegation.executor_selection import (
     ExecutorSelector,
     OptInHermesExecutorSelector,
@@ -96,6 +101,8 @@ class DelegationManager:
         executor_selector: ExecutorSelector | None = None,
         persistence: DelegationStatePersistence | None = None,
         persistence_path: str | Path | None = None,
+        audit_store: ExecutionAuditStore | None = None,
+        audit_path: str | Path | None = None,
     ) -> None:
         self._requests: dict[str, DelegationRequest] = {}
         self._statuses: dict[str, DelegationStatus] = {}
@@ -103,6 +110,9 @@ class DelegationManager:
         self._event_sink = event_sink
         self._worker_registry = worker_registry
         self._executor_selector = executor_selector
+        if audit_store is not None and audit_path is not None:
+            raise ValueError("Provide audit_store or audit_path, not both")
+        self._audit = audit_store or ExecutionAuditStore(audit_path)
         if persistence is not None and persistence_path is not None:
             raise ValueError("Provide persistence or persistence_path, not both")
         self._persistence = persistence or (
@@ -134,6 +144,7 @@ class DelegationManager:
         self._requests[request.delegation_id] = request
         self._statuses[request.delegation_id] = DelegationStatus.PENDING
         self._events[request.delegation_id] = []
+        self._audit.create(request.delegation_id)
         self._persist(request.delegation_id)
 
         return self._emit(
@@ -257,6 +268,13 @@ class DelegationManager:
         )
         self._pending_approvals[delegation_id] = pending
         self._persist(delegation_id)
+        self._audit.update(
+            delegation_id,
+            ExecutionAuditStatus.WAITING_APPROVAL,
+            approval_state="pending",
+            message=reason,
+            metadata=dict(metadata or {}),
+        )
         return event
 
     def approve(
@@ -275,6 +293,13 @@ class DelegationManager:
             metadata={"approval_id": approval_id, **dict(metadata or {})},
         )
         self._persist(delegation_id)
+        self._audit.update(
+            delegation_id,
+            ExecutionAuditStatus.WAITING_APPROVAL,
+            approval_state="approved",
+            message="Approval granted by Maya Core.",
+            metadata=dict(metadata or {}),
+        )
         return event
 
     def reject(
@@ -294,6 +319,15 @@ class DelegationManager:
             metadata={"approval_id": approval_id, **dict(metadata or {})},
         )
         self._persist(delegation_id)
+        self._audit.update(
+            delegation_id,
+            ExecutionAuditStatus.WAITING_APPROVAL,
+            approval_state="rejected",
+            terminal_status=DelegationStatus.REJECTED.value,
+            error_metadata={"reason": reason},
+            message=reason,
+            metadata=dict(metadata or {}),
+        )
         return event
 
     def get_pending_approval(self, delegation_id: str) -> PendingApproval:
@@ -305,6 +339,22 @@ class DelegationManager:
             raise KeyError(
                 f"No pending approval: {delegation_id}"
             ) from exc
+
+    def execution_record(
+        self,
+        delegation_id: str,
+    ) -> DelegationExecutionRecord:
+        """Return the internal execution audit record for a delegation."""
+        self._require(delegation_id)
+        return self._audit.get(delegation_id)
+
+    def execution_summary(self, delegation_id: str) -> dict[str, Any]:
+        """Return an operator-readable structured execution summary."""
+        return self.execution_record(delegation_id).summary()
+
+    def operator_summary(self, delegation_id: str) -> str:
+        """Return a concise operator-readable execution summary."""
+        return self.execution_record(delegation_id).operator_summary()
 
     def cancel(
         self,
@@ -333,6 +383,14 @@ class DelegationManager:
         self._pending_approvals.pop(delegation_id, None)
         self._active_workers.pop(delegation_id, None)
         self._persist(delegation_id)
+        self._audit.update(
+            delegation_id,
+            ExecutionAuditStatus.CANCELLED,
+            approval_state="cancelled",
+            terminal_status=DelegationStatus.CANCELLED.value,
+            message=message,
+            metadata=dict(metadata or {}),
+        )
         return event
 
     def execute(
@@ -483,12 +541,32 @@ class DelegationManager:
         trace = dict(selection.trace)
         trace["selection_reason"] = selection.reason
         trace["target"] = selection.target
+        correlation_id = str(
+            request.metadata.get("correlation_id")
+            or request.request_id
+            or request.delegation_id
+        )
+        trace["correlation_id"] = correlation_id
+        self._audit.update(
+            request.delegation_id,
+            ExecutionAuditStatus.SELECTED,
+            executor_selected=selection.target,
+            correlation_id=correlation_id,
+            policy_recommendation=trace.get("policy_recommendation"),
+            capability_decision={
+                key: value
+                for key, value in trace.items()
+                if (
+                    "capabil" in key
+                    or "available" in key
+                    or "permission" in key
+                )
+            },
+            message=selection.reason,
+            metadata=trace,
+        )
 
         if selection.blocked:
-            self.start(
-                request.delegation_id,
-                metadata={"execution_trace": trace},
-            )
             self.approval_required(
                 request.delegation_id,
                 str(request.metadata.get("approval_id", "approval-" + request.delegation_id)),
@@ -531,6 +609,7 @@ class DelegationManager:
                 **dict(request.metadata),
                 "task": request.task,
                 "execution_trace": trace,
+                "correlation_id": correlation_id,
             },
         )
 
@@ -660,6 +739,14 @@ class DelegationManager:
         self._statuses[delegation_id] = status
         self._events[delegation_id].append(event)
         self._persist(delegation_id)
+        self._audit_for_status(
+            delegation_id,
+            status,
+            error=error,
+            result=result,
+            metadata=metadata,
+            message=message,
+        )
 
         if self._event_sink is not None:
             self._event_sink(event)
@@ -684,9 +771,70 @@ class DelegationManager:
         self._statuses[delegation_id] = event.status
         self._events[delegation_id].append(event)
         self._persist(delegation_id)
+        self._audit_for_status(
+            delegation_id,
+            event.status,
+            error=event.error,
+            result=event.result,
+            metadata=event.metadata,
+            message=event.message,
+        )
 
         if self._event_sink is not None:
             self._event_sink(event)
+
+    def _audit_for_status(
+        self,
+        delegation_id: str,
+        status: DelegationStatus,
+        *,
+        error: str | None = None,
+        result: Any = None,
+        metadata: dict[str, Any] | None = None,
+        message: str | None = None,
+    ) -> None:
+        if status in {
+            DelegationStatus.STARTED,
+            DelegationStatus.RUNNING,
+            DelegationStatus.PROGRESS,
+        }:
+            audit_status = ExecutionAuditStatus.RUNNING
+        elif status == DelegationStatus.WAITING_APPROVAL:
+            audit_status = ExecutionAuditStatus.WAITING_APPROVAL
+        elif status == DelegationStatus.COMPLETED:
+            audit_status = ExecutionAuditStatus.COMPLETED
+        elif status == DelegationStatus.FAILED:
+            audit_status = ExecutionAuditStatus.FAILED
+        elif status == DelegationStatus.CANCELLED:
+            audit_status = ExecutionAuditStatus.CANCELLED
+        else:
+            return
+
+        error_metadata = None
+        if error is not None:
+            error_metadata = {
+                "error": error,
+                **dict(metadata or {}),
+            }
+        terminal_status = (
+            status.value
+            if status
+            in {
+                DelegationStatus.COMPLETED,
+                DelegationStatus.FAILED,
+                DelegationStatus.CANCELLED,
+            }
+            else None
+        )
+        self._audit.update(
+            delegation_id,
+            audit_status,
+            error_metadata=error_metadata,
+            terminal_status=terminal_status,
+            result=result,
+            message=message,
+            metadata=metadata,
+        )
 
     @staticmethod
     def _executor_event(
@@ -797,3 +945,14 @@ class DelegationManager:
                 self._pending_approvals[delegation_id] = PendingApproval(
                     **approval
                 )
+
+            try:
+                self._audit.get(delegation_id)
+            except KeyError:
+                self._audit.create(delegation_id)
+                if self._statuses[delegation_id] == DelegationStatus.WAITING_APPROVAL:
+                    self._audit.update(
+                        delegation_id,
+                        ExecutionAuditStatus.WAITING_APPROVAL,
+                        approval_state="pending",
+                    )
