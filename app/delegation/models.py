@@ -15,11 +15,35 @@ class DelegationStatus(str, Enum):
     """Lifecycle states emitted by the delegation manager."""
 
     PENDING = "pending"
+    RUNNING = "running"
     STARTED = "started"
     PROGRESS = "progress"
+    WAITING_APPROVAL = "waiting_approval"
+    APPROVED = "approved"
+    REJECTED = "rejected"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class DelegationEventType(str, Enum):
+    """Provider-neutral event categories."""
+
+    LIFECYCLE = "lifecycle"
+    APPROVAL_REQUIRED = "approval_required"
+
+
+@dataclass(frozen=True)
+class PendingApproval:
+    """Approval request awaiting a Maya Core decision."""
+
+    delegation_id: str
+    approval_id: str
+    reason: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+    requested_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 
 
 @dataclass(frozen=True)
@@ -55,3 +79,4 @@ class DelegationEvent:
     result: Any = None
     error: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    event_type: DelegationEventType = DelegationEventType.LIFECYCLE

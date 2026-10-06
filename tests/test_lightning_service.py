@@ -1,6 +1,7 @@
 import unittest
 
 from app.services.lightning import LightningService
+from app.services.lightning_executor import InMemoryLightningExecutor
 from app.workers.lightning_protocol import (
     LightningEventType,
     LightningJob,
@@ -66,4 +67,11 @@ class LightningServiceTests(unittest.TestCase):
         self.assertEqual(health["service"], "lightning")
         self.assertEqual(health["status"], "healthy")
         self.assertEqual(health["backend"], "in_memory")
+        self.assertTrue(health["available"])
         self.assertEqual(health["active_jobs"], 0)
+
+    def test_default_service_uses_in_memory_executor(self):
+        self.assertIsInstance(
+            self.service.executor,
+            InMemoryLightningExecutor,
+        )

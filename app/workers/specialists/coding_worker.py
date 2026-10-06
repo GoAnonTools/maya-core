@@ -5,6 +5,7 @@ from typing import Any
 
 from app.delegation.models import (
     DelegationEvent,
+    DelegationEventType,
     DelegationRequest,
     DelegationStatus,
 )
@@ -191,9 +192,19 @@ class CodingSpecialistWorker(SpecialistWorker):
             LightningEventType.FAILED: DelegationStatus.FAILED,
             LightningEventType.CANCELLED: DelegationStatus.CANCELLED,
         }
+        approval_required = bool(event.metadata.get("approval_required"))
         return DelegationEvent(
             delegation_id=event.delegation_id,
-            status=status_by_type[event.event_type],
+            status=(
+                DelegationStatus.WAITING_APPROVAL
+                if approval_required
+                else status_by_type[event.event_type]
+            ),
+            event_type=(
+                DelegationEventType.APPROVAL_REQUIRED
+                if approval_required
+                else DelegationEventType.LIFECYCLE
+            ),
             progress=event.progress,
             message=event.message,
             result=event.result,

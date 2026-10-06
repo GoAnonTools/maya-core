@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
+import os
+from typing import Any
 
 
 class ApprovalRequirement(str, Enum):
@@ -18,6 +20,152 @@ class OperationScope(str, Enum):
 
     READ_ONLY = "read_only"
     MUTATING = "mutating"
+
+
+class HermesRecommendation(str, Enum):
+    """Recommendation returned by the disabled-by-default Hermes policy."""
+
+    CANDIDATE = "candidate"
+    LOCAL = "local"
+    APPROVAL_REQUIRED = "approval_required"
+
+
+@dataclass(frozen=True)
+class HermesPolicyDecision:
+    """A recommendation that does not select or execute a worker."""
+
+    recommendation: HermesRecommendation
+    eligible_for_hermes: bool
+    hermes_enabled: bool
+    approval_required: bool = False
+    reason: str = ""
+    missing_permissions: frozenset[str] = frozenset()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class HermesDelegationPolicy:
+    """Recommend Hermes eligibility without performing delegation.
+
+    The policy is deliberately separate from routing. It never selects a
+    worker, submits a job, approves an operation, or changes the default
+    executor.
+    """
+
+    def __init__(self, enabled: bool = False) -> None:
+        self.enabled = enabled
+
+    @classmethod
+    def from_environment(cls) -> "HermesDelegationPolicy":
+        """Load the opt-in flag; Hermes is disabled unless explicitly enabled."""
+        return cls(
+            enabled=os.getenv("MAYA_HERMES_ENABLED", "false").lower()
+            in {"1", "true", "yes"}
+        )
+
+    def recommend(
+        self,
+        task: str,
+        *,
+        task_category: str | None = None,
+        dangerous: bool = False,
+        requires_approval: bool = False,
+        granted_permissions: frozenset[str] = frozenset(),
+        required_permissions: frozenset[str] = frozenset(),
+    ) -> HermesPolicyDecision:
+        """Return a recommendation only; never execute or approve work."""
+        if not isinstance(task, str) or not task.strip():
+            return self._local("empty task")
+
+        missing = frozenset(required_permissions - granted_permissions)
+        if missing:
+            return HermesPolicyDecision(
+                recommendation=HermesRecommendation.LOCAL,
+                eligible_for_hermes=False,
+                hermes_enabled=self.enabled,
+                reason="required permissions are not granted",
+                missing_permissions=missing,
+            )
+
+        if dangerous or requires_approval:
+            return HermesPolicyDecision(
+                recommendation=HermesRecommendation.APPROVAL_REQUIRED,
+                eligible_for_hermes=False,
+                hermes_enabled=self.enabled,
+                approval_required=True,
+                reason="task requires approval before delegation",
+            )
+
+        category = self._category(task, task_category)
+        if category in {"coding", "research"}:
+            if not self.enabled:
+                return HermesPolicyDecision(
+                    recommendation=HermesRecommendation.CANDIDATE,
+                    eligible_for_hermes=False,
+                    hermes_enabled=False,
+                    reason=(
+                        "task is a Hermes candidate, but Hermes is disabled; "
+                        "local fallback remains effective"
+                    ),
+                    metadata={"effective_target": "local"},
+                )
+
+            return HermesPolicyDecision(
+                recommendation=HermesRecommendation.CANDIDATE,
+                eligible_for_hermes=True,
+                hermes_enabled=True,
+                reason=f"{category} task is eligible for Hermes",
+                metadata={"task_category": category},
+            )
+
+        if category == "unknown":
+            return self._local("task category is unknown")
+
+        return self._local("task is suitable for local execution")
+
+    def _local(self, reason: str) -> HermesPolicyDecision:
+        return HermesPolicyDecision(
+            recommendation=HermesRecommendation.LOCAL,
+            eligible_for_hermes=False,
+            hermes_enabled=self.enabled,
+            reason=reason,
+        )
+
+    @staticmethod
+    def _category(task: str, requested: str | None) -> str:
+        if requested:
+            normalized = requested.strip().lower()
+            if normalized in {"coding", "research", "conversation", "simple"}:
+                return normalized
+            return "unknown"
+
+        text = task.lower()
+        if any(
+            marker in text
+            for marker in (
+                "code",
+                "coding",
+                "repository",
+                "bug",
+                "implement",
+                "refactor",
+                "script",
+            )
+        ):
+            return "coding"
+        if any(
+            marker in text
+            for marker in (
+                "research",
+                "investigate",
+                "sources",
+                "literature",
+                "compare",
+            )
+        ):
+            return "research"
+        if "?" in text or text.startswith(("what ", "who ", "when ", "why ", "how ")):
+            return "conversation"
+        return "unknown"
 
 
 @dataclass(frozen=True)

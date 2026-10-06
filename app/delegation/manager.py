@@ -1,13 +1,33 @@
 """In-memory delegation lifecycle manager."""
 
 from collections.abc import Callable
+from dataclasses import asdict
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from app.delegation.models import (
     DelegationEvent,
+    DelegationEventType,
     DelegationRequest,
     DelegationStatus,
+    PendingApproval,
 )
+from app.delegation.persistence import DelegationStatePersistence
+from app.delegation.executor_selection import (
+    ExecutorSelector,
+    OptInHermesExecutorSelector,
+)
+from app.services.lightning_executor import (
+    InMemoryLightningExecutor,
+    LightningExecutor,
+)
+from app.workers.lightning_protocol import (
+    LightningEvent,
+    LightningEventType,
+    LightningJob,
+)
+from app.workers.capabilities import WorkerRole
 from app.workers.registry import WorkerRegistry
 from app.workers.specialist import SpecialistWorker
 
@@ -20,22 +40,50 @@ class DelegationManager:
 
     _TRANSITIONS = {
         DelegationStatus.PENDING: {
+            DelegationStatus.RUNNING,
             DelegationStatus.STARTED,
+            DelegationStatus.WAITING_APPROVAL,
             DelegationStatus.FAILED,
             DelegationStatus.CANCELLED,
         },
         DelegationStatus.STARTED: {
+            DelegationStatus.RUNNING,
             DelegationStatus.PROGRESS,
+            DelegationStatus.WAITING_APPROVAL,
             DelegationStatus.COMPLETED,
             DelegationStatus.FAILED,
             DelegationStatus.CANCELLED,
         },
         DelegationStatus.PROGRESS: {
+            DelegationStatus.RUNNING,
+            DelegationStatus.PROGRESS,
+            DelegationStatus.WAITING_APPROVAL,
+            DelegationStatus.COMPLETED,
+            DelegationStatus.FAILED,
+            DelegationStatus.CANCELLED,
+        },
+        DelegationStatus.RUNNING: {
+            DelegationStatus.PROGRESS,
+            DelegationStatus.WAITING_APPROVAL,
+            DelegationStatus.COMPLETED,
+            DelegationStatus.FAILED,
+            DelegationStatus.CANCELLED,
+        },
+        DelegationStatus.WAITING_APPROVAL: {
+            DelegationStatus.APPROVED,
+            DelegationStatus.REJECTED,
+            DelegationStatus.CANCELLED,
+            DelegationStatus.FAILED,
+        },
+        DelegationStatus.APPROVED: {
+            DelegationStatus.STARTED,
+            DelegationStatus.RUNNING,
             DelegationStatus.PROGRESS,
             DelegationStatus.COMPLETED,
             DelegationStatus.FAILED,
             DelegationStatus.CANCELLED,
         },
+        DelegationStatus.REJECTED: set(),
         DelegationStatus.COMPLETED: set(),
         DelegationStatus.FAILED: set(),
         DelegationStatus.CANCELLED: set(),
@@ -45,16 +93,30 @@ class DelegationManager:
         self,
         event_sink: EventSink | None = None,
         worker_registry: WorkerRegistry | None = None,
+        executor_selector: ExecutorSelector | None = None,
+        persistence: DelegationStatePersistence | None = None,
+        persistence_path: str | Path | None = None,
     ) -> None:
         self._requests: dict[str, DelegationRequest] = {}
         self._statuses: dict[str, DelegationStatus] = {}
         self._events: dict[str, list[DelegationEvent]] = {}
         self._event_sink = event_sink
         self._worker_registry = worker_registry
+        self._executor_selector = executor_selector
+        if persistence is not None and persistence_path is not None:
+            raise ValueError("Provide persistence or persistence_path, not both")
+        self._persistence = persistence or (
+            DelegationStatePersistence(persistence_path)
+            if persistence_path is not None
+            else None
+        )
+        self._pending_approvals: dict[str, PendingApproval] = {}
         self._active_workers: dict[
             str,
             tuple[SpecialistWorker, str],
         ] = {}
+        self._active_executors: dict[str, tuple[LightningExecutor, str]] = {}
+        self._restore_state()
 
     def accept(self, request: DelegationRequest) -> DelegationEvent:
         """Accept a new request and emit its pending event."""
@@ -72,6 +134,7 @@ class DelegationManager:
         self._requests[request.delegation_id] = request
         self._statuses[request.delegation_id] = DelegationStatus.PENDING
         self._events[request.delegation_id] = []
+        self._persist(request.delegation_id)
 
         return self._emit(
             request.delegation_id,
@@ -89,6 +152,20 @@ class DelegationManager:
         return self._transition(
             delegation_id,
             DelegationStatus.STARTED,
+            message=message,
+            metadata=metadata,
+        )
+
+    def running(
+        self,
+        delegation_id: str,
+        message: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> DelegationEvent:
+        """Mark a delegation as actively running."""
+        return self._transition(
+            delegation_id,
+            DelegationStatus.RUNNING,
             message=message,
             metadata=metadata,
         )
@@ -148,6 +225,87 @@ class DelegationManager:
             metadata=metadata,
         )
 
+    def approval_required(
+        self,
+        delegation_id: str,
+        approval_id: str,
+        reason: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> DelegationEvent:
+        """Record an approval request without making an approval decision."""
+        if not approval_id.strip():
+            raise ValueError("approval_id must not be empty")
+        if not reason.strip():
+            raise ValueError("approval reason must not be empty")
+
+        pending = PendingApproval(
+            delegation_id=delegation_id,
+            approval_id=approval_id,
+            reason=reason,
+            metadata=dict(metadata or {}),
+        )
+        event = self._transition(
+            delegation_id,
+            DelegationStatus.WAITING_APPROVAL,
+            message=reason,
+            metadata={
+                **dict(metadata or {}),
+                "approval_id": approval_id,
+                "approval_required": True,
+            },
+            event_type=DelegationEventType.APPROVAL_REQUIRED,
+        )
+        self._pending_approvals[delegation_id] = pending
+        self._persist(delegation_id)
+        return event
+
+    def approve(
+        self,
+        delegation_id: str,
+        approval_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> DelegationEvent:
+        """Record Maya Core's approval decision; do not execute work."""
+        self._require_pending_approval(delegation_id, approval_id)
+        self._pending_approvals.pop(delegation_id, None)
+        event = self._transition(
+            delegation_id,
+            DelegationStatus.APPROVED,
+            message="Approval granted by Maya Core.",
+            metadata={"approval_id": approval_id, **dict(metadata or {})},
+        )
+        self._persist(delegation_id)
+        return event
+
+    def reject(
+        self,
+        delegation_id: str,
+        approval_id: str,
+        reason: str = "Approval denied by Maya Core.",
+        metadata: dict[str, Any] | None = None,
+    ) -> DelegationEvent:
+        """Record Maya Core's rejection decision; do not execute work."""
+        self._require_pending_approval(delegation_id, approval_id)
+        self._pending_approvals.pop(delegation_id, None)
+        event = self._transition(
+            delegation_id,
+            DelegationStatus.REJECTED,
+            message=reason,
+            metadata={"approval_id": approval_id, **dict(metadata or {})},
+        )
+        self._persist(delegation_id)
+        return event
+
+    def get_pending_approval(self, delegation_id: str) -> PendingApproval:
+        """Return the pending approval owned by Maya Core."""
+        self._require(delegation_id)
+        try:
+            return self._pending_approvals[delegation_id]
+        except KeyError as exc:
+            raise KeyError(
+                f"No pending approval: {delegation_id}"
+            ) from exc
+
     def cancel(
         self,
         delegation_id: str,
@@ -161,12 +319,21 @@ class DelegationManager:
             worker, execution_id = active
             worker.cancel(execution_id)
 
-        return self._transition(
+        active_executor = self._active_executors.get(delegation_id)
+        if active_executor is not None:
+            executor, execution_id = active_executor
+            executor.cancel(execution_id)
+
+        event = self._transition(
             delegation_id,
             DelegationStatus.CANCELLED,
             message=message,
             metadata=metadata,
         )
+        self._pending_approvals.pop(delegation_id, None)
+        self._active_workers.pop(delegation_id, None)
+        self._persist(delegation_id)
+        return event
 
     def execute(
         self,
@@ -231,6 +398,7 @@ class DelegationManager:
             )
 
             terminal = False
+            waiting_for_approval = False
 
             for event in worker.stream_events(execution_id):
                 self._forward_event(request.delegation_id, event)
@@ -239,13 +407,21 @@ class DelegationManager:
                     DelegationStatus.COMPLETED,
                     DelegationStatus.FAILED,
                     DelegationStatus.CANCELLED,
+                    DelegationStatus.REJECTED,
                 }:
                     terminal = True
+                    break
+
+                if event.status == DelegationStatus.WAITING_APPROVAL:
+                    terminal = True
+                    waiting_for_approval = True
                     break
 
             if not terminal and self.get_status(request.delegation_id) not in {
                 DelegationStatus.CANCELLED,
                 DelegationStatus.FAILED,
+                DelegationStatus.REJECTED,
+                DelegationStatus.WAITING_APPROVAL,
             }:
                 self.fail(
                     request.delegation_id,
@@ -257,10 +433,159 @@ class DelegationManager:
                 DelegationStatus.COMPLETED,
                 DelegationStatus.FAILED,
                 DelegationStatus.CANCELLED,
+                DelegationStatus.REJECTED,
+                DelegationStatus.WAITING_APPROVAL,
             }:
                 self.fail(request.delegation_id, str(exc))
         finally:
-            self._active_workers.pop(request.delegation_id, None)
+            if not waiting_for_approval:
+                self._active_workers.pop(request.delegation_id, None)
+
+        return self.events(request.delegation_id)
+
+    def execute_with_executor(
+        self,
+        request: DelegationRequest,
+        *,
+        selector: ExecutorSelector | None = None,
+        task_category: str | None = None,
+        approval_granted: bool = False,
+    ) -> list[DelegationEvent]:
+        """Explicitly execute through a selected Lightning executor.
+
+        This path is opt-in and independent from ``execute()``, which keeps
+        the existing worker-registry behavior. It never selects an executor
+        unless a selector is injected or explicitly passed.
+        """
+        if request.delegation_id not in self._requests:
+            self.accept(request)
+        elif self._requests[request.delegation_id] != request:
+            raise ValueError(
+                f"Delegation already exists: {request.delegation_id}"
+            )
+
+        approval_granted = approval_granted or (
+            self.get_status(request.delegation_id)
+            == DelegationStatus.APPROVED
+        )
+        selected = selector or self._executor_selector
+        if selected is None:
+            selected = OptInHermesExecutorSelector(
+                hermes_executor=InMemoryLightningExecutor(),
+                fallback_executor=InMemoryLightningExecutor(),
+            )
+
+        selection = selected.select(
+            request,
+            task_category=task_category,
+            approval_granted=approval_granted,
+        )
+        trace = dict(selection.trace)
+        trace["selection_reason"] = selection.reason
+        trace["target"] = selection.target
+
+        if selection.blocked:
+            self.start(
+                request.delegation_id,
+                metadata={"execution_trace": trace},
+            )
+            self.approval_required(
+                request.delegation_id,
+                str(request.metadata.get("approval_id", "approval-" + request.delegation_id)),
+                selection.reason or "Approval is required before execution.",
+                metadata={"execution_trace": trace},
+            )
+            return self.events(request.delegation_id)
+
+        executor = selection.executor
+        if executor is None:
+            self.fail(
+                request.delegation_id,
+                "Executor selection returned no executable backend.",
+                metadata={"execution_trace": trace},
+            )
+            return self.events(request.delegation_id)
+
+        if not executor.is_available():
+            self.fail(
+                request.delegation_id,
+                f"Selected executor is unavailable: {executor.backend_name}",
+                metadata={"execution_trace": trace},
+            )
+            return self.events(request.delegation_id)
+
+        self.start(
+            request.delegation_id,
+            metadata={"execution_trace": trace},
+        )
+        job = LightningJob(
+            delegation_id=request.delegation_id,
+            request_id=request.request_id,
+            session_id=request.session_id,
+            workspace=request.metadata.get("workspace"),
+            capabilities=request.required_capabilities,
+            permissions=frozenset(
+                request.metadata.get("granted_permissions", ())
+            ),
+            metadata={
+                **dict(request.metadata),
+                "task": request.task,
+                "execution_trace": trace,
+            },
+        )
+
+        try:
+            execution_id = executor.submit(job)
+            self._active_executors[request.delegation_id] = (
+                executor,
+                execution_id,
+            )
+            terminal = False
+            waiting_for_approval = False
+            for event in executor.stream_events(execution_id):
+                forwarded = self._executor_event(
+                    event,
+                    execution_trace=trace,
+                )
+                self._forward_event(request.delegation_id, forwarded)
+                if forwarded.status in {
+                    DelegationStatus.COMPLETED,
+                    DelegationStatus.FAILED,
+                    DelegationStatus.CANCELLED,
+                    DelegationStatus.REJECTED,
+                }:
+                    terminal = True
+                    break
+                if forwarded.status == DelegationStatus.WAITING_APPROVAL:
+                    terminal = True
+                    waiting_for_approval = True
+                    break
+
+            if not terminal and self.get_status(request.delegation_id) not in {
+                DelegationStatus.CANCELLED,
+                DelegationStatus.FAILED,
+                DelegationStatus.WAITING_APPROVAL,
+            }:
+                self.fail(
+                    request.delegation_id,
+                    "Executor ended without a terminal event.",
+                    metadata={"execution_trace": trace},
+                )
+        except Exception as exc:
+            if self.get_status(request.delegation_id) not in {
+                DelegationStatus.COMPLETED,
+                DelegationStatus.FAILED,
+                DelegationStatus.CANCELLED,
+                DelegationStatus.WAITING_APPROVAL,
+            }:
+                self.fail(
+                    request.delegation_id,
+                    str(exc),
+                    metadata={"execution_trace": trace},
+                )
+        finally:
+            if not waiting_for_approval:
+                self._active_executors.pop(request.delegation_id, None)
 
         return self.events(request.delegation_id)
 
@@ -289,6 +614,7 @@ class DelegationManager:
         result: Any = None,
         error: str | None = None,
         metadata: dict[str, Any] | None = None,
+        event_type: DelegationEventType = DelegationEventType.LIFECYCLE,
     ) -> DelegationEvent:
         current = self._require(delegation_id)
 
@@ -306,6 +632,7 @@ class DelegationManager:
             result=result,
             error=error,
             metadata=metadata,
+            event_type=event_type,
         )
 
     def _emit(
@@ -318,10 +645,12 @@ class DelegationManager:
         result: Any = None,
         error: str | None = None,
         metadata: dict[str, Any] | None = None,
+        event_type: DelegationEventType = DelegationEventType.LIFECYCLE,
     ) -> DelegationEvent:
         event = DelegationEvent(
             delegation_id=delegation_id,
             status=status,
+            event_type=event_type,
             message=message,
             progress=progress,
             result=result,
@@ -330,6 +659,7 @@ class DelegationManager:
         )
         self._statuses[delegation_id] = status
         self._events[delegation_id].append(event)
+        self._persist(delegation_id)
 
         if self._event_sink is not None:
             self._event_sink(event)
@@ -342,14 +672,128 @@ class DelegationManager:
         event: DelegationEvent,
     ) -> None:
         """Forward a worker event into the manager history and sink."""
+        if event.status == DelegationStatus.WAITING_APPROVAL:
+            approval_id = event.metadata.get("approval_id")
+            if isinstance(approval_id, str):
+                self._pending_approvals[delegation_id] = PendingApproval(
+                    delegation_id=delegation_id,
+                    approval_id=approval_id,
+                    reason=event.message or "Approval required.",
+                    metadata=dict(event.metadata),
+                )
         self._statuses[delegation_id] = event.status
         self._events[delegation_id].append(event)
+        self._persist(delegation_id)
 
         if self._event_sink is not None:
             self._event_sink(event)
+
+    @staticmethod
+    def _executor_event(
+        event: LightningEvent,
+        *,
+        execution_trace: dict[str, Any],
+    ) -> DelegationEvent:
+        """Translate executor events into the manager's provider-neutral form."""
+        status_by_type = {
+            LightningEventType.STARTED: DelegationStatus.STARTED,
+            LightningEventType.PROGRESS: DelegationStatus.PROGRESS,
+            LightningEventType.COMPLETED: DelegationStatus.COMPLETED,
+            LightningEventType.FAILED: DelegationStatus.FAILED,
+            LightningEventType.CANCELLED: DelegationStatus.CANCELLED,
+        }
+        approval_required = bool(event.metadata.get("approval_required"))
+        status = (
+            DelegationStatus.WAITING_APPROVAL
+            if approval_required
+            else status_by_type[event.event_type]
+        )
+        event_type = (
+            DelegationEventType.APPROVAL_REQUIRED
+            if approval_required
+            else DelegationEventType.LIFECYCLE
+        )
+        return DelegationEvent(
+            delegation_id=event.delegation_id,
+            status=status,
+            event_type=event_type,
+            progress=event.progress,
+            message=event.message,
+            result=event.result,
+            error=event.error,
+            metadata={
+                "execution_trace": execution_trace,
+                **dict(event.metadata),
+            },
+        )
 
     def _require(self, delegation_id: str) -> DelegationStatus:
         if delegation_id not in self._requests:
             raise KeyError(f"Unknown delegation: {delegation_id}")
 
         return self._statuses[delegation_id]
+
+    def _require_pending_approval(
+        self,
+        delegation_id: str,
+        approval_id: str,
+    ) -> PendingApproval:
+        pending = self.get_pending_approval(delegation_id)
+        if pending.approval_id != approval_id:
+            raise ValueError(
+                f"Approval ID does not match pending approval: {approval_id}"
+            )
+        return pending
+
+    def _persist(self, delegation_id: str) -> None:
+        if self._persistence is None or delegation_id not in self._requests:
+            return
+
+        request = self._requests[delegation_id]
+        serialized = asdict(request)
+        serialized["required_capabilities"] = sorted(
+            serialized["required_capabilities"]
+        )
+        serialized["specialist_capabilities"] = sorted(
+            serialized["specialist_capabilities"]
+        )
+        specialist_role = serialized.get("specialist_role")
+        if specialist_role is not None:
+            serialized["specialist_role"] = specialist_role.value
+
+        self._persistence.save(
+            delegation_id=delegation_id,
+            request=serialized,
+            status=self._statuses[delegation_id].value,
+            pending_approval=self._pending_approvals.get(delegation_id),
+        )
+
+    def _restore_state(self) -> None:
+        if self._persistence is None:
+            return
+
+        for delegation_id, record in self._persistence.load().items():
+            request_data = dict(record.get("request", {}))
+            request_data["required_capabilities"] = frozenset(
+                request_data.get("required_capabilities", [])
+            )
+            request_data["specialist_capabilities"] = frozenset(
+                request_data.get("specialist_capabilities", [])
+            )
+            specialist_role = request_data.get("specialist_role")
+            if specialist_role is not None:
+                request_data["specialist_role"] = WorkerRole(specialist_role)
+            self._requests[delegation_id] = DelegationRequest(**request_data)
+            self._statuses[delegation_id] = DelegationStatus(
+                record["status"]
+            )
+            self._events[delegation_id] = []
+
+            approval = record.get("pending_approval")
+            if approval is not None:
+                approval["requested_at"] = datetime.fromisoformat(
+                    approval["requested_at"]
+                )
+                self._pending_approvals[delegation_id] = PendingApproval(
+                    **approval
+                )

@@ -1,13 +1,13 @@
-"""In-memory Lightning service skeleton.
+"""Lightning service boundary backed by an injectable executor."""
 
-This service models remote specialist job lifecycle locally. It deliberately
-does not perform model execution or use a network transport.
-"""
+from typing import Any, Iterator
 
-from dataclasses import dataclass
-from typing import Any
-from uuid import uuid4
-
+from app.services.lightning_executor import (
+    ExecutorCapabilities,
+    InMemoryLightningExecutor,
+    LightningExecutor,
+    LightningSession,
+)
 from app.workers.lightning_protocol import (
     LightningEvent,
     LightningEventType,
@@ -15,93 +15,47 @@ from app.workers.lightning_protocol import (
 )
 
 
-@dataclass
-class LightningSession:
-    """In-memory execution session for a submitted Lightning job."""
-
-    execution_id: str
-    session_id: str
-    job: LightningJob
-    cancelled: bool = False
-    terminal: bool = False
-
-
 class LightningService:
-    """Minimal in-memory service for Lightning protocol jobs."""
+    """Protocol service that delegates execution to a LightningExecutor."""
 
-    def __init__(self) -> None:
-        self._sessions: dict[str, LightningSession] = {}
-        self._healthy = True
+    def __init__(self, executor: LightningExecutor | None = None) -> None:
+        self._executor = executor or InMemoryLightningExecutor()
+
+    @property
+    def executor(self) -> LightningExecutor:
+        """Return the executor behind this service boundary."""
+        return self._executor
 
     def submit(self, job: LightningJob) -> str:
-        """Create an in-memory delegation session for a job."""
-        if not job.delegation_id.strip():
-            raise ValueError("delegation_id must not be empty")
+        """Accept a Lightning job through the configured executor."""
+        return self._executor.submit(job)
 
-        execution_id = f"lightning-execution-{uuid4()}"
-        session_id = job.session_id or f"lightning-session-{uuid4()}"
-        self._sessions[execution_id] = LightningSession(
-            execution_id=execution_id,
-            session_id=session_id,
-            job=job,
-        )
-        return execution_id
-
-    def stream_events(self, execution_id: str):
-        """Emit deterministic in-memory lifecycle events for a job."""
-        session = self._get_session(execution_id)
-
-        yield self._event(session, LightningEventType.STARTED)
-
-        if session.cancelled:
-            session.terminal = True
-            yield self._event(session, LightningEventType.CANCELLED)
-            return
-
-        yield self._event(
-            session,
-            LightningEventType.PROGRESS,
-            progress=0.5,
-            message="In-memory execution progress.",
-        )
-
-        if session.cancelled:
-            session.terminal = True
-            yield self._event(session, LightningEventType.CANCELLED)
-            return
-
-        session.terminal = True
-        yield self._event(
-            session,
-            LightningEventType.COMPLETED,
-            progress=1.0,
-            result={"backend": "in_memory", "execution_id": execution_id},
-        )
+    def stream_events(self, execution_id: str) -> Iterator[LightningEvent]:
+        """Forward the executor's lifecycle event stream."""
+        return self._executor.stream_events(execution_id)
 
     def cancel(self, execution_id: str) -> None:
-        """Mark an active in-memory session as cancelled."""
-        session = self._get_session(execution_id)
+        """Forward cancellation to the configured executor."""
+        self._executor.cancel(execution_id)
 
-        if session.terminal:
-            raise ValueError("Cannot cancel a terminal Lightning session")
-
-        session.cancelled = True
+    def capabilities(self) -> ExecutorCapabilities:
+        """Return executor capabilities without selecting an execution path."""
+        return self._executor.capabilities()
 
     def health(self) -> dict[str, Any]:
-        """Return service health without probing external systems."""
-        active_jobs = sum(
-            not session.terminal for session in self._sessions.values()
-        )
+        """Return service health and executor availability."""
+        available = self._executor.is_available()
         return {
             "service": "lightning",
-            "status": "healthy" if self._healthy else "unhealthy",
-            "backend": "in_memory",
-            "active_jobs": active_jobs,
+            "status": "healthy" if available else "unhealthy",
+            "backend": self._executor.backend_name,
+            "available": available,
+            "active_jobs": self._executor.active_jobs(),
         }
 
     def get_session(self, execution_id: str) -> LightningSession:
-        """Return an in-memory session for inspection."""
-        return self._get_session(execution_id)
+        """Return executor session state for the protocol adapter."""
+        return self._executor.get_session(execution_id)
 
     def _event(
         self,
@@ -112,6 +66,7 @@ class LightningService:
         message: str | None = None,
         result: Any = None,
     ) -> LightningEvent:
+        """Build an event for service subclasses that customize streaming."""
         return LightningEvent(
             delegation_id=session.job.delegation_id,
             event_type=event_type,
@@ -120,11 +75,5 @@ class LightningService:
             progress=progress,
             message=message,
             result=result,
-            metadata={"backend": "in_memory"},
+            metadata={"backend": self._executor.backend_name},
         )
-
-    def _get_session(self, execution_id: str) -> LightningSession:
-        try:
-            return self._sessions[execution_id]
-        except KeyError as exc:
-            raise KeyError(f"Unknown Lightning execution: {execution_id}") from exc
