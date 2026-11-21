@@ -9,4 +9,7 @@ venv/
 
 .pytest_cache/
 
+# Runtime logs
+*.log
+
 .DS_Store
