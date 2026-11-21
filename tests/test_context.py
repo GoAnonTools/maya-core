@@ -6,9 +6,23 @@ from app.context import create_request_context
 
 class RequestContextTests(unittest.TestCase):
     @patch("app.context.load_settings")
+    @patch("app.identity.load_identity")
     @patch("app.context.load_identity")
-    def test_context_has_stable_hermes_package(self, load_identity, load_settings):
-        load_identity.return_value = {"identity": {"name": "Maya"}}
+    def test_context_has_stable_hermes_package(
+        self, load_identity, identity_load_identity, load_settings
+    ):
+        identity = {
+            "identity": {"name": "Maya"},
+            "system_prompt_template": (
+                "Current context:\n"
+                "- The user's name is {user_name}.\n"
+                "- Current mode: {current_mode}.\n"
+                "\n"
+                "Respond naturally. You are Maya."
+            ),
+        }
+        load_identity.return_value = identity
+        identity_load_identity.return_value = identity
         load_settings.return_value = {"maya": {"mode": "online"}}
 
         context = create_request_context("  hello  ")
@@ -16,7 +30,16 @@ class RequestContextTests(unittest.TestCase):
         self.assertEqual(
             context,
             {
-                "maya": {"identity": "Maya"},
+                "maya": {
+                    "identity": "Maya",
+                    "system_prompt": (
+                        "Current context:\n"
+                        "- The user's name is David.\n"
+                        "- Current mode: online.\n"
+                        "\n"
+                        "Respond naturally. You are Maya."
+                    ),
+                },
                 "mode": "online",
                 "message": "hello",
             },

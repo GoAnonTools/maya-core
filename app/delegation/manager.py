@@ -14,6 +14,7 @@ from app.delegation.models import (
     PendingApproval,
 )
 from app.delegation.persistence import DelegationStatePersistence
+from app.identity import render_system_prompt
 from app.delegation.audit import (
     DelegationExecutionRecord,
     ExecutionAuditStatus,
@@ -508,6 +509,7 @@ class DelegationManager:
         selector: ExecutorSelector | None = None,
         task_category: str | None = None,
         approval_granted: bool = False,
+        request_context: dict[str, Any] | None = None,
     ) -> list[DelegationEvent]:
         """Explicitly execute through a selected Lightning executor.
 
@@ -608,6 +610,7 @@ class DelegationManager:
             metadata={
                 **dict(request.metadata),
                 "task": request.task,
+                "system_prompt": render_system_prompt(request_context),
                 "execution_trace": trace,
                 "correlation_id": correlation_id,
             },

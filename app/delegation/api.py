@@ -11,6 +11,23 @@ from fastapi.responses import StreamingResponse
 
 from app.delegation.manager import DelegationManager
 from app.delegation.repository_workflow import RepositoryAnalysisWorkflow
+from app.settings import load_settings
+
+
+def _delegation_request_context(body: dict[str, Any]) -> dict[str, Any]:
+    """Minimal per-request context for delegation prompt rendering.
+
+    The delegation API carries no user message, so ``mode`` comes from the
+    caller's body when present, else from Maya config (the same value the
+    chat path uses)."""
+    mode = body.get("mode")
+    if not isinstance(mode, str) or not mode.strip():
+        try:
+            maya = load_settings().get("maya")
+            mode = maya.get("mode") if isinstance(maya, dict) else None
+        except (OSError, ValueError):
+            mode = None
+    return {"mode": mode}
 
 
 def create_delegation_observability_app(
@@ -85,7 +102,12 @@ def register_repository_analysis_routes(
                 detail="Hermes is disabled. Enable it explicitly before starting repository analysis.",
             )
         body = payload or {}
-        return _jsonable(workflow.create(workspace=body.get("workspace")))
+        return _jsonable(
+            workflow.create(
+                workspace=body.get("workspace"),
+                request_context=_delegation_request_context(body),
+            )
+        )
 
     @application.post("/delegations/{delegation_id}/approve")
     def approve_repository_analysis(delegation_id: str, payload: dict[str, Any]):

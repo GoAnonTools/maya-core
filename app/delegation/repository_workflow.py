@@ -23,8 +23,15 @@ READ_ONLY_REPOSITORY_TASK = "Analyze this project structure and provide recommen
 class RepositoryAnalysisWorkflow:
     manager: DelegationManager
     selector: OptInHermesExecutorSelector
+    # Per-request context for render_system_prompt(); set by the API layer.
+    request_context: dict[str, Any] | None = None
 
-    def create(self, *, workspace: str | None = None) -> dict[str, Any]:
+    def create(
+        self,
+        *,
+        workspace: str | None = None,
+        request_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         delegation_id = "repository-analysis-" + uuid4().hex
         request = DelegationRequest(
             delegation_id=delegation_id,
@@ -40,7 +47,11 @@ class RepositoryAnalysisWorkflow:
                 "correlation_id": delegation_id,
             },
         )
-        events = self.manager.execute_with_executor(request, selector=self.selector)
+        events = self.manager.execute_with_executor(
+            request,
+            selector=self.selector,
+            request_context=request_context or self.request_context,
+        )
         pending = self.manager.get_pending_approval(delegation_id)
         return {
             "delegation_id": delegation_id,
@@ -56,6 +67,7 @@ class RepositoryAnalysisWorkflow:
             request,
             selector=self.selector,
             approval_granted=True,
+            request_context=self.request_context,
         )
         return {
             "delegation_id": delegation_id,
