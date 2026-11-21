@@ -43,7 +43,13 @@ except ValueError:
     _repository_analysis_workflow = None
 register_repository_analysis_routes(app, _repository_analysis_workflow)
 if _repository_analysis_workflow is not None:
-    app.mount("", create_delegation_observability_app(_repository_analysis_workflow.manager))
+    # A blank mount path matches every request and swallows routes registered
+    # before it (e.g. /health). Keep the read-only observability app behind an
+    # explicit prefix so it can never shadow the core routes.
+    app.mount(
+        "/_observability",
+        create_delegation_observability_app(_repository_analysis_workflow.manager),
+    )
 
 
 def get_mode():

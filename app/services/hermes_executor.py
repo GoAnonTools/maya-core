@@ -203,6 +203,11 @@ class HermesExecutor(LightningExecutor):
                 }:
                     saw_terminal = True
                     self._mark_terminal(execution_id, translated.event_type)
+                    # A terminal Hermes event IS the terminal result: forward it
+                    # and stop. HermesUnknownTerminalState is reserved for a
+                    # stream that closes without one.
+                    yield translated
+                    return
                 yield translated
                 if session.terminal:
                     return
@@ -372,6 +377,10 @@ class HermesExecutor(LightningExecutor):
             metadata["approval_id"] = event.approval_id
 
         message = event.message or event.delta
+        if lightning_type == LightningEventType.FAILED:
+            # Hermes sends failures with only an ``error`` field; surface it as
+            # the message so the delegation record carries the real reason.
+            message = event.message or event.error or event.delta
         if event.tool_name is not None:
             metadata["tool_name"] = event.tool_name
         if event.tool_call_id is not None:

@@ -315,10 +315,15 @@ class HermesHttpTransport(HermesTransport):
         if isinstance(nested, dict):
             payload = nested
 
+        # Payload-level event names take precedence: providers (e.g. Hermes's
+        # /v1/runs SSE) carry the lifecycle name in ``event`` inside the data
+        # object, not in an SSE ``event:`` line. Falling through to PROGRESS
+        # here silently drops run.completed/run.failed/run.cancelled.
         raw_type = (
-            event_name
+            payload.get("event")
             or payload.get("type")
             or payload.get("event_type")
+            or event_name
             or HermesEventType.PROGRESS.value
         )
         try:
