@@ -1,5 +1,7 @@
 import json
+import os
 import unittest
+from unittest.mock import patch
 
 import httpx
 
@@ -171,3 +173,57 @@ class OpenAIProviderIntegrationTests(unittest.TestCase):
                 '{"choices":[{"delta":{"content":" Maya"}}]}',
             ],
         )
+
+
+class ModelAuthHeaderTests(unittest.TestCase):
+    """MAYA_MODEL_API_KEY gates the bearer header on every model call."""
+
+    CONTEXT = {"maya": {"identity": "Maya"}, "mode": "online", "message": "Hi"}
+    ROUTE = {"mode": "online", "model": "claude-sonnet-5-5", "endpoint": "http://127.0.0.1:8101"}
+
+    @staticmethod
+    def _handler(received):
+        def handle(request):
+            received.append(dict(request.headers))
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "ok"}}]},
+                request=request,
+            )
+
+        return handle
+
+    def test_sends_bearer_header_when_key_is_set(self):
+        received = []
+        with patch.dict(os.environ, {"MAYA_MODEL_API_KEY": "test-key-123"}, clear=False), \
+                httpx.Client(transport=httpx.MockTransport(self._handler(received))) as client:
+            send_prompt(self.CONTEXT, self.ROUTE, client)
+
+        self.assertEqual(received[0].get("authorization"), "Bearer test-key-123")
+
+    def test_sends_no_authorization_header_when_key_is_unset(self):
+        received = []
+        with patch.dict(os.environ, {"MAYA_MODEL_API_KEY": ""}, clear=False), \
+                httpx.Client(transport=httpx.MockTransport(self._handler(received))) as client:
+            send_prompt(self.CONTEXT, self.ROUTE, client)
+
+        self.assertNotIn("authorization", received[0])
+
+    def test_streaming_sends_bearer_header_when_key_is_set(self):
+        received = []
+
+        def handle(request):
+            received.append(dict(request.headers))
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=b'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n',
+                request=request,
+            )
+
+        with patch.dict(os.environ, {"MAYA_MODEL_API_KEY": "test-key-123"}, clear=False), \
+                httpx.Client(transport=httpx.MockTransport(handle)) as client:
+            chunks = list(stream_prompt(self.CONTEXT, self.ROUTE, client))
+
+        self.assertEqual(received[0].get("authorization"), "Bearer test-key-123")
+        self.assertEqual(len(chunks), 1)

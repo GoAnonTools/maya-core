@@ -5,9 +5,14 @@ maya:
 
 services:
   model:
-    provider: lightning
-    model: NousResearch/Hermes-3-Llama-3.1-8B
-    base_url: http://localhost:8000
+    # Chat path (/chat, /chat/stream) -> local LiteLLM proxy.
+    # The alias below maps to DeepSeek via LiteLLM. base_url has no /v1
+    # suffix: the client appends /v1/chat/completions itself.
+    # Auth comes from the MAYA_MODEL_API_KEY env var at process start; never
+    # put a literal key in this file.
+    provider: litellm
+    model: claude-sonnet-5-5
+    base_url: http://127.0.0.1:8101
     endpoint: null
 
   memory:

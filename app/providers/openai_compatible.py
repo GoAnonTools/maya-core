@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 import httpx
@@ -6,6 +7,17 @@ from app.settings import load_settings
 
 
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
+MODEL_API_KEY_ENV = "MAYA_MODEL_API_KEY"
+
+
+def auth_headers() -> dict[str, str]:
+    """Bearer header for the model endpoint, or {} when no key is configured.
+
+    Read from the environment at call time. An unset key means the endpoint
+    is treated as keyless (e.g. a local llama-server), never an error.
+    """
+    key = os.environ.get(MODEL_API_KEY_ENV, "").strip()
+    return {"Authorization": f"Bearer {key}"} if key else {}
 
 
 def build_chat_completion_payload(
@@ -100,6 +112,7 @@ def send_chat_completion(
         response = client.post(
             f"{base_url.rstrip('/')}{request['path']}",
             json=request["payload"],
+            headers=auth_headers(),
         )
         response.raise_for_status()
 
@@ -132,6 +145,7 @@ def stream_chat_completion(
                 **request["payload"],
                 "stream": True,
             },
+            headers=auth_headers(),
         ) as response:
 
             response.raise_for_status()
